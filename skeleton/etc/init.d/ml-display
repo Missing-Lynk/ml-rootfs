@@ -48,6 +48,7 @@ start() {
 
 	if [ -x "$BROKER" ]; then
 		start-stop-daemon --start --background --make-pidfile \
+			--stdout /var/log/ml-drmfd.log --stderr /var/log/ml-drmfd.log \
 			--pidfile "$PIDFILE" --exec "$BROKER"
 		i=0
 		while [ ! -S "$SOCK" ] && [ $i -lt 50 ]; do

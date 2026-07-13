@@ -62,7 +62,17 @@ start_kmsg() {
 	KPID=$!
 }
 
+# Mirror the live service logs (tmpfs /var/log, wiped on reboot) into the session dir, so the SD
+# archive is self-contained and survives a power cycle. Cheap: the daemons are quiet, so the files
+# stay small and the periodic copy is trivial. Runs on each sample tick and once more on the way out.
+mirror_logs() {
+	for f in /var/log/*.log; do
+		[ -f "$f" ] && cp "$f" "$SDIR/" 2>/dev/null
+	done
+}
+
 cleanup() {
+	mirror_logs
 	[ -n "$KPID" ] && kill "$KPID" 2>/dev/null
 	rm -f /run/ml-log.dir 2>/dev/null
 	exit 0
@@ -90,6 +100,8 @@ while : ; do
 	read l1 _ < /proc/loadavg
 
 	echo "$up,$mf,$ma,$cf,$ct,$l1" >> "$STATS"
+
+	mirror_logs
 
 	# Restart the kmsg follower if it died (heavy spew can EPIPE a slow reader).
 	if [ -n "$KPID" ] && ! kill -0 "$KPID" 2>/dev/null; then

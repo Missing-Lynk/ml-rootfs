@@ -39,6 +39,7 @@ start() {
 	fi
 
 	start-stop-daemon --start --background --make-pidfile --pidfile "$PIDFILE" \
+		--stdout /var/log/ml-hud.log --stderr /var/log/ml-hud.log \
 		--exec "$HUD" -- --drm "$PLANE" --bind 0.0.0.0 --port "$PORT" --idle-ms 0 \
 		--btfl-font "$FONT"
 
