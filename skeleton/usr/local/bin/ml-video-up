@@ -32,4 +32,10 @@ fi
 # DVR records native 1080p60: requires the page-granular coherent-pool kernel (patch 0011);
 # on a power-of-2-pool kernel the encoder FBC ENOMEMs (0-byte file) - fall back to
 # ML_DVR_RES=720 ML_DVR_FPS=30 there.
-exec env ML_COMPOSE=1 ml-pipeline "${1:-rf}"
+#
+# Cap the composite pool (ML_COMP_MAX): uncapped it greedily grabs CMA buffers until the heap is
+# exhausted, leaving nothing for the HUD's overlay - a boot-time race the HUD (or, once it wins,
+# the pipeline's own runtime allocations) loses. ~10 x 3 MiB fits the pool, the HUD overlay, and
+# runtime headroom in the 56 MiB CMA, and stays above the 5-buffer floor for smooth 60 fps.
+# Override with ML_COMP_MAX to retune per board.
+exec env ML_COMPOSE=1 ML_COMP_MAX="${ML_COMP_MAX:-10}" ml-pipeline "${1:-rf}"

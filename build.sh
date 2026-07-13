@@ -314,16 +314,18 @@ else
   log "video: $LINKD_BIN absent (build with make -C userspace linkd); skipping"
 fi
 
-# gpio_pulse: releases the AR8030 reset at boot (ml-video service). Static aarch64 build of
-# kernel/test_tools/gpio_pulse.c (aarch64-linux-gnu-gcc -static -O2).
-GPIO_PULSE="$HERE/../kernel/test_tools/gpio_pulse"
-if [ -f "$GPIO_PULSE" ]; then
+# ml-rf-bringup: the AR8030 RF link bring-up at boot (ml-video service) - reset release, SDIO
+# re-probe, baseband firmware download, sdio0 config (absorbs the old gpio_pulse). Essential: with
+# no RF bring-up there is no video, so a missing binary is a HARD build error, not a silent skip.
+# Static aarch64 (make -C userspace rf-bringup).
+RF_BRINGUP_BIN="$US/build/ml-rf-bringup"
+if [ -f "$RF_BRINGUP_BIN" ]; then
   mkdir -p "$STAGE/usr/local/bin"
-  install -m 0755 "$GPIO_PULSE" "$STAGE/usr/local/bin/gpio_pulse"
-  "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/gpio_pulse" 2>/dev/null || true
-  log "video: staged gpio_pulse -> /usr/local/bin/ (AR8030 reset release at boot)"
+  install -m 0755 "$RF_BRINGUP_BIN" "$STAGE/usr/local/bin/ml-rf-bringup"
+  "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/ml-rf-bringup" 2>/dev/null || true
+  log "video: staged ml-rf-bringup -> /usr/local/bin/ (AR8030 RF link bring-up at boot)"
 else
-  log "video: $GPIO_PULSE absent (build with aarch64-linux-gnu-gcc -static kernel/test_tools/gpio_pulse.c); skipping (boot RF bring-up will be skipped)"
+  die "video: $RF_BRINGUP_BIN absent - RF bring-up is essential; build it with 'make -C userspace rf-bringup'"
 fi
 
 # Slot-switch helpers for the HUD's "Switch to Slot A" action: mtdtool (flips the gpt0 active bit;
