@@ -304,14 +304,14 @@ else
   log "video: $PIPELINE_BIN absent (build with userspace/gstreamer/scripts/build-static.sh); skipping"
 fi
 
-LINKD_BIN="$US/ml-linkd/build/ml-linkd"
+LINKD_BIN="$US/build/ml-linkd"
 if [ -f "$LINKD_BIN" ]; then
   mkdir -p "$STAGE/usr/local/bin"
   install -m 0755 "$LINKD_BIN" "$STAGE/usr/local/bin/ml-linkd"
   "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/ml-linkd" 2>/dev/null || true
   log "video: staged ml-linkd -> /usr/local/bin/"
 else
-  log "video: $LINKD_BIN absent (build with make -C userspace/ml-linkd); skipping"
+  log "video: $LINKD_BIN absent (build with make -C userspace linkd); skipping"
 fi
 
 # gpio_pulse: releases the AR8030 reset at boot (ml-video service). Static aarch64 build of
@@ -348,13 +348,13 @@ done
 # ml-ledd (the ml-ledd boot service): the static status-LED indicator daemon. It runs in the
 # boot runlevel before the SD card mounts, so unlike the gst-squashfs daemons it must live in the
 # rootfs itself. Staged if built (ml-ledd/Makefile); the service warns and skips at boot otherwise.
-LEDD_BIN="$US/ml-ledd/build/ml-ledd"
+LEDD_BIN="$US/build/ml-ledd"
 if [ -f "$LEDD_BIN" ]; then
   mkdir -p "$STAGE/usr/local/bin"
   install -m 0755 "$LEDD_BIN" "$STAGE/usr/local/bin/ml-ledd"
   log "ml-ledd: staged -> /usr/local/bin/ml-ledd"
 else
-  log "ml-ledd: $LEDD_BIN absent (build with make -C userspace/ml-ledd); skipping"
+  log "ml-ledd: $LEDD_BIN absent (build with make -C userspace ledd); skipping"
 fi
 
 echo "$HOSTNAME" > "$STAGE/etc/hostname"
