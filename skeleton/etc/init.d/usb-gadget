@@ -1,0 +1,105 @@
+#!/sbin/openrc-run
+# Bring up a USB CDC-ECM gadget on the dwc2 UDC and address the device-side interface.
+# Addressing (@DEV_MAC@ etc.) is templated in from build.sh at image-build time.
+description="USB ECM network gadget (configfs)"
+
+# Provide "net" so dropbear's `need net` resolves; this is the only network on the box.
+depend() {
+	provide net
+	after sysfs modules
+	keyword -timeout
+}
+
+CONFIGFS="/sys/kernel/config"
+G="$CONFIGFS/usb_gadget/g1"
+
+# Values are templated in by build.sh.
+DEV_MAC="@DEV_MAC@"
+HOST_MAC="@HOST_MAC@"
+GADGET_IP="@GADGET_IP@"
+GADGET_CIDR="@GADGET_CIDR@"
+HOST_GW="@HOST_GW@"
+
+# Probing below: tolerate transient absence of the UDC / netdev, so do not let a single
+# failed read abort the whole service. Hard errors are reported explicitly.
+start() {
+	ebegin "Configuring USB ECM gadget"
+
+	if ! mountpoint -q "$CONFIGFS"; then
+		modprobe configfs 2>/dev/null || true
+		mount -t configfs none "$CONFIGFS" 2>/dev/null || true
+	fi
+	[ -d "$CONFIGFS/usb_gadget" ] || { eend 1 "configfs usb_gadget unavailable"; return 1; }
+
+	mkdir -p "$G"
+	echo 0x1d6b > "$G/idVendor"      # Linux Foundation
+	echo 0x0104 > "$G/idProduct"     # Multifunction Composite Gadget
+	echo 0x0200 > "$G/bcdUSB"
+	echo 0x0100 > "$G/bcdDevice"
+
+	mkdir -p "$G/strings/0x409"
+	echo "missinglynk"            > "$G/strings/0x409/manufacturer"
+	echo "Artosyn device (open)"  > "$G/strings/0x409/product"
+	echo "0001"                   > "$G/strings/0x409/serialnumber"
+
+	# ECM function with FIXED MACs (stable host ifname across reboots).
+	mkdir -p "$G/functions/ecm.usb0"
+	echo "$DEV_MAC"  > "$G/functions/ecm.usb0/dev_addr"
+	echo "$HOST_MAC" > "$G/functions/ecm.usb0/host_addr"
+
+	mkdir -p "$G/configs/c.1/strings/0x409"
+	echo "CDC ECM" > "$G/configs/c.1/strings/0x409/configuration"
+	echo 250       > "$G/configs/c.1/MaxPower"
+	ln -sf "$G/functions/ecm.usb0" "$G/configs/c.1/" 2>/dev/null || true
+
+	# Bind to the (single) dwc2 UDC. On the Artosyn SoC this is "8000000.usb".
+	local udc=""
+	local i=0
+	while [ "$i" -lt 50 ]; do
+		udc="$(ls /sys/class/udc 2>/dev/null | head -n1)"
+		[ -n "$udc" ] && break
+		i=$((i + 1))
+		sleep 0.2
+	done
+	[ -n "$udc" ] || { eend 1 "no UDC in /sys/class/udc"; return 1; }
+	echo "$udc" > "$G/UDC" || { eend 1 "failed to bind UDC $udc"; return 1; }
+
+	# The device-side netdev appears after binding. Prefer the function's reported
+	# ifname; fall back to scanning for a usb* interface.
+	local iface=""
+	i=0
+	while [ "$i" -lt 50 ]; do
+		if [ -f "$G/functions/ecm.usb0/ifname" ]; then
+			iface="$(cat "$G/functions/ecm.usb0/ifname" 2>/dev/null)"
+		fi
+		if [ -z "$iface" ] || [ ! -e "/sys/class/net/$iface" ]; then
+			for n in /sys/class/net/usb*; do
+				[ -e "$n" ] && iface="$(basename "$n")" && break
+			done
+		fi
+		[ -n "$iface" ] && [ -e "/sys/class/net/$iface" ] && break
+		i=$((i + 1))
+		sleep 0.2
+	done
+	[ -n "$iface" ] && [ -e "/sys/class/net/$iface" ] || { eend 1 "gadget netdev did not appear"; return 1; }
+
+	ip addr flush dev "$iface" 2>/dev/null || true
+	ip addr add "$GADGET_IP/$GADGET_CIDR" dev "$iface"
+	ip link set "$iface" up
+	# Host acts as gateway/NAT for internet + apk.
+	ip route replace default via "$HOST_GW" dev "$iface" 2>/dev/null || true
+
+	eend 0
+}
+
+stop() {
+	ebegin "Tearing down USB ECM gadget"
+	[ -e "$G/UDC" ] && echo "" > "$G/UDC" 2>/dev/null || true
+	rm -f "$G/configs/c.1/ecm.usb0" 2>/dev/null || true
+	rmdir "$G/configs/c.1/strings/0x409" 2>/dev/null || true
+	rmdir "$G/configs/c.1" 2>/dev/null || true
+	rmdir "$G/functions/ecm.usb0" 2>/dev/null || true
+	rmdir "$G/strings/0x409" 2>/dev/null || true
+	rmdir "$G" 2>/dev/null || true
+	eend 0
+}

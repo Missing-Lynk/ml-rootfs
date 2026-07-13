@@ -1,0 +1,28 @@
+#!/bin/sh
+# ml-info: quick status banner for the open Artosyn dev/slim rootfs. Busybox-ash safe;
+# relies only on busybox applets + iproute2 (both present in every flavor).
+
+flavor="$(cat /etc/ml-flavor 2>/dev/null || echo '?')"
+host="$(hostname 2>/dev/null || echo '?')"
+kver="$(uname -r)"
+
+# Which partition/volume booted, straight from the kernel cmdline.
+boot=""
+for tok in $(cat /proc/cmdline 2>/dev/null); do
+	case "$tok" in
+		ubi.mtd=*|root=*) boot="$boot $tok";;
+	esac
+done
+[ -n "$boot" ] || boot=" (unknown)"
+
+# IPv4 on real interfaces (iproute2 `ip`; skip loopback).
+ips="$(ip -o -4 addr show 2>/dev/null | awk '$2!="lo"{printf "%s=%s ", $2, $4}')"
+[ -n "$ips" ] || ips="(none)"
+
+# How many kernel modules are staged (0 = none baked in for this build).
+ko_count="$(find /lib/modules -name '*.ko' 2>/dev/null | wc -l | tr -d ' ')"
+
+printf '  %s  (flavor=%s)\n' "$host" "$flavor"
+printf '  kernel : %s   modules: %s .ko\n' "$kver" "$ko_count"
+printf '  net    : %s\n' "$ips"
+printf '  boot   :%s\n' "$boot"

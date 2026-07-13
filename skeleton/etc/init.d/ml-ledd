@@ -1,0 +1,40 @@
+#!/sbin/openrc-run
+# Status LED indicator: breathe red until the RF link carries video, solid green once it does.
+#
+# Runs in the boot runlevel (not default like the other ml-* daemons) so the LED is one of the
+# first signs of life. Its only needs are /run (mounted in sysinit) and /dev/spidev* (built-in
+# SPI, present once devtmpfs mounts), both satisfied here: `after devfs`. ml-ledd defaults to
+# breathe-red on its own, so it is meaningful before ml-linkd (a later, non-OpenRC process) sends
+# any command. This service loads no modules.
+#
+# Best-effort: a missing binary or spidev logs a warning and leaves the box otherwise up.
+description="Status LED: breathe red / solid green off the RF link"
+
+LEDD=/usr/local/bin/ml-ledd
+PIDFILE=/run/ml-ledd.pid
+
+depend() {
+	after devfs
+}
+
+start() {
+	ebegin "Starting status LED"
+
+	if [ ! -x "$LEDD" ]; then
+		ewarn "ml-ledd: $LEDD missing (build ml-ledd/ and stage it); skipping"
+		eend 0
+		return 0
+	fi
+
+	start-stop-daemon --start --background --make-pidfile --pidfile "$PIDFILE" \
+		--exec "$LEDD"
+
+	eend $?
+}
+
+stop() {
+	# SIGTERM (start-stop-daemon default) so ml-ledd turns the LED off on the way out.
+	ebegin "Stopping status LED"
+	start-stop-daemon --stop --pidfile "$PIDFILE" 2>/dev/null
+	eend 0
+}

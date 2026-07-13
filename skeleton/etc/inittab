@@ -1,0 +1,17 @@
+# /etc/inittab - busybox init, OpenRC-managed runlevels (owned by the rootfs build so we
+# control exactly which gettys spawn: only the debug UART, no phantom VT gettys).
+
+# System init + OpenRC runlevels.
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
+
+# Serial-console login on the debug UART. Device/baud match the kernel bootargs
+# (console=ttyS0,1152000, see kernel/dts/proxima-9311.dts). -L: local line, no carrier
+# detect. This is a network-independent way in when the USB gadget net does not enumerate.
+ttyS0::respawn:/sbin/getty -L 1152000 ttyS0 vt100
+
+# Reboot / shutdown handling.
+::ctrlaltdel:/sbin/reboot
+::shutdown:/sbin/openrc shutdown
+::shutdown:/bin/umount -a -r

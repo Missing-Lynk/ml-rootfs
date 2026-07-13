@@ -1,0 +1,108 @@
+#!/bin/sh
+# ml-logd - lightweight flight-session logger to the SD card. Follows the kernel ring buffer and
+# samples a few /proc counters so a session can be analysed after the fact (RF/SDIO resets, wave5
+# codec errors, CMA exhaustion, OOM). Started by the ml-logd init script only when /mnt/sdcard is
+# mounted. Best-effort and bounded: one numbered directory per run, keep the last KEEP, cap the
+# kmsg file. Runs are numbered (run-NNNN) off a persistent counter, never dated - the clock is not
+# trustworthy on this device, so ordering must not depend on it.
+#
+# Design is deliberately cheap: `cat /dev/kmsg` is a blocking read (0% CPU when the kernel is quiet,
+# one open fd, no polling); the sampler wakes every SAMPLE seconds, reads pseudo-files with shell
+# builtins (no grep/awk fork), and appends one line. No global sync - the kernel's dirty writeback
+# flushes our tiny files on its own schedule, so we never contend with the DVR writing the same card.
+#
+# Correlate the three streams (kernel.log timestamps, stats.csv uptime_s, ml-linkd's rf.log uptime)
+# on the shared CLOCK_MONOTONIC axis - they line up even before ntp sets wall time.
+set -u
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin:$PATH
+
+LOGROOT=/mnt/sdcard/logs
+KEEP=10                          # session directories to retain
+SAMPLE=10                        # stats sample period, seconds
+KMSG_CAP=$((4 * 1024 * 1024))    # rotate kernel.log past 4 MB (crash-spew safety net)
+
+[ -d /mnt/sdcard ] || { echo "ml-logd: /mnt/sdcard absent, not starting"; exit 0; }
+mkdir -p "$LOGROOT" || { echo "ml-logd: cannot create $LOGROOT"; exit 0; }
+
+# Run id: a persistent counter incremented each start (never dated). The counter file is hidden so
+# the run-*/ glob never matches it.
+CF="$LOGROOT/.runcount"
+n=0
+[ -f "$CF" ] && read n < "$CF" 2>/dev/null
+n=$((n + 1))
+echo "$n" > "$CF"
+RUN="$(printf 'run-%04d' "$n")"
+SDIR="$LOGROOT/$RUN"
+mkdir -p "$SDIR"
+
+# Prune to the last KEEP runs, ordered by run number (zero-padded, so lexical sort == numeric).
+# Sorting by number, not mtime, keeps retention correct even with a wrong/rewound clock.
+ls -1d "$LOGROOT"/run-*/ 2>/dev/null | sort -r | tail -n +$((KEEP + 1)) | while read -r old; do
+	rm -rf "$old"
+done
+
+# One-time context snapshot so a session is self-describing.
+{
+	echo "run: $RUN"
+	uname -a
+	echo "--- cmdline ---"; cat /proc/cmdline
+	echo "--- lsmod ---";   lsmod
+	echo "--- mount ---";   mount
+} > "$SDIR/env.txt" 2>/dev/null
+
+# Publish the session dir for ml-linkd (lazy reader; skips if this file is absent). /run is tmpfs.
+echo "$SDIR" > /run/ml-log.dir 2>/dev/null
+
+KERN="$SDIR/kernel.log"
+STATS="$SDIR/stats.csv"
+KPID=""
+
+start_kmsg() {
+	cat /dev/kmsg >> "$KERN" 2>/dev/null &
+	KPID=$!
+}
+
+cleanup() {
+	[ -n "$KPID" ] && kill "$KPID" 2>/dev/null
+	rm -f /run/ml-log.dir 2>/dev/null
+	exit 0
+}
+trap cleanup TERM INT
+
+start_kmsg
+echo "uptime_s,mem_free_kb,mem_avail_kb,cma_free_kb,cma_total_kb,load1" > "$STATS"
+
+while : ; do
+	# uptime (first field of /proc/uptime).
+	read up _ < /proc/uptime
+
+	# Pull the four meminfo fields with a single builtin pass (no grep/awk fork).
+	mf=""; ma=""; cf=""; ct=""
+	while read -r key val _ ; do
+		case "$key" in
+			MemFree:)      mf=$val ;;
+			MemAvailable:) ma=$val ;;
+			CmaFree:)      cf=$val ;;
+			CmaTotal:)     ct=$val ;;
+		esac
+	done < /proc/meminfo
+
+	read l1 _ < /proc/loadavg
+
+	echo "$up,$mf,$ma,$cf,$ct,$l1" >> "$STATS"
+
+	# Restart the kmsg follower if it died (heavy spew can EPIPE a slow reader).
+	if [ -n "$KPID" ] && ! kill -0 "$KPID" 2>/dev/null; then
+		start_kmsg
+	fi
+
+	# Cap kernel.log: rotate one generation on overflow (rare; a crash loop is the only path).
+	sz=$(stat -c %s "$KERN" 2>/dev/null || echo 0)
+	if [ "$sz" -gt "$KMSG_CAP" ] 2>/dev/null; then
+		[ -n "$KPID" ] && kill "$KPID" 2>/dev/null
+		mv -f "$KERN" "$KERN.1" 2>/dev/null
+		start_kmsg
+	fi
+
+	sleep "$SAMPLE"
+done

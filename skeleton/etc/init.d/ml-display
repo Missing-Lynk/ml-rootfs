@@ -1,0 +1,79 @@
+#!/sbin/openrc-run
+# Display bring-up at boot: load the DRM display stack, start the ml-drmfd DRM-master
+# broker (the session anchor every display client attaches to: ml-splash now,
+# ml-pipeline/ml-hud later), paint the boot splash (the vendor mountain, nosignal.yuv,
+# I420 on the DRM primary - covered by video/OSD planes later, uncovered when they
+# stop), and switch the backlight on.
+#
+# Best-effort throughout: missing binaries/asset/drivers log a warning and the boot
+# continues - a dark panel then means a real display-driver problem (which is the
+# point: splash visible = display chain healthy, before any video work).
+#
+# `after modules mdev hwdrivers`: the coldplug loads the display chain (VO/DSI/panel/GPIO/PWM), so
+# we only wait for /dev/dri/card0, then start the broker + splash + backlight. This service loads no
+# modules.
+description="Display bring-up: DRM stack + boot splash + backlight"
+
+BROKER=/usr/local/bin/ml-drmfd
+SPLASH=/usr/local/bin/ml-splash
+IMAGE=/usr/local/share/nosignal.yuv
+PIDFILE=/run/ml-drmfd.pid
+SOCK=/run/missinglynk/drm.sock
+
+depend() {
+	after modules mdev hwdrivers
+}
+
+start() {
+	ebegin "Bringing up display"
+
+	# ar_dtbo_sdio (modules-load.d) creates the a10a000.gpio node the panel reset line uses; wait
+	# for the coldplug to finish binding the chain.
+	local i=0
+	while [ ! -e /dev/dri/card0 ] && [ $i -lt 50 ]; do
+		sleep 0.1
+		i=$((i + 1))
+	done
+
+	if [ ! -e /dev/dri/card0 ]; then
+		ewarn "ml-display: /dev/dri/card0 never appeared (display drivers missing?)"
+		eend 0
+		return 0
+	fi
+
+	# Backlight off until the splash is up, so the panel is dark (not backlit-black) during the
+	# broker+splash bring-up; turned back on after the splash paints. The sysfs node exists only once
+	# the panel/backlight driver has bound (which card0 above implies).
+	echo 1 > /sys/class/backlight/backlight/bl_power 2>/dev/null
+
+	if [ -x "$BROKER" ]; then
+		start-stop-daemon --start --background --make-pidfile \
+			--pidfile "$PIDFILE" --exec "$BROKER"
+		i=0
+		while [ ! -S "$SOCK" ] && [ $i -lt 50 ]; do
+			sleep 0.1
+			i=$((i + 1))
+		done
+	else
+		ewarn "ml-display: $BROKER missing - no broker, no splash"
+	fi
+
+	if [ -x "$SPLASH" ] && [ -S "$SOCK" ]; then
+		if [ -f "$IMAGE" ]; then
+			"$SPLASH" "$IMAGE" || ewarn "ml-display: splash failed"
+		else
+			ewarn "ml-display: $IMAGE missing (stage the vendor dump into the rootfs build)"
+		fi
+	fi
+
+	# Backlight on now that the splash is up (paired with the off above).
+	echo 0 > /sys/class/backlight/backlight/bl_power 2>/dev/null
+
+	eend 0
+}
+
+stop() {
+	ebegin "Stopping ml-drmfd (drops the display session)"
+	start-stop-daemon --stop --pidfile "$PIDFILE" 2>/dev/null
+	eend 0
+}

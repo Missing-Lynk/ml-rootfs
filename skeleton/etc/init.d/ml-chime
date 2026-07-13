@@ -1,0 +1,89 @@
+#!/sbin/openrc-run
+# Play a short power-on chime through the goggle buzzer at boot.
+#
+# The buzzer is channel 0 of the 2nd artosyn PWM controller (DT node pwm@1002000),
+# driven purely through the /sys/class/pwm sysfs ABI - no SDK, no /dev/mem.
+#
+# A tone = one PWM period; pitch = 1/period, loudness = duty cycle. For a musical chime
+# we hold a fixed 50% duty (the loudest ratio the firmware uses) and step the period to
+# change pitch. The melody is a list of "freqHz:durationMs" tokens - edit MELODY to taste.
+#
+# `after hwdrivers` guarantees the modalias coldplug has run and bound artosyn_pwm to the
+# DT pwm node, so the pwmchip exists before we look for it. The whole thing is best-effort
+# and backgrounded: a missing chip or a failed sysfs write just skips the chime, and boot is
+# never delayed or aborted by it.
+description="Power-on buzzer chime"
+
+depend() {
+	after modules mdev hwdrivers
+}
+
+PWM_CLASS="/sys/class/pwm"
+BUZZER_ADDR="1002000"   # 2nd artosyn PWM controller -> "1002000.pwm"
+BUZZER_CHAN=0
+
+# Rising power-on chime, held on the buzzer's ~3.85 kHz resonant peak so it ends loud
+# (the stock firmware drives the piezo there for the same reason; notes far below
+# resonance are much quieter). "freqHz:durationMs" per note.
+MELODY="3000:120 3500:120 3850:300"
+GAP_MS=60               # silence between notes
+
+# Sleep for a whole number of milliseconds using busybox's fractional `sleep` (the same
+# float-seconds support the usb-gadget service relies on) - no dependency on the usleep applet.
+sleep_ms() {
+	sleep "$(printf '%d.%03d' $(($1 / 1000)) $(($1 % 1000)))"
+}
+
+# Locate the pwmchipN the buzzer controller bound to, by matching its platform device
+# name "<addr>.pwm" (the chip number depends on probe order, so never hard-code it).
+# Echoes the chosen dir, or nothing if no matching chip is present.
+find_buzzer_chip() {
+	local d base
+	for d in "$PWM_CLASS"/pwmchip*; do
+		[ -e "$d/device" ] || continue
+		base="$(readlink "$d/device" 2>/dev/null)"
+		base="${base##*/}"
+		case "$base" in
+			"$BUZZER_ADDR".pwm) echo "$d"; return 0 ;;
+		esac
+	done
+	return 1
+}
+
+start() {
+	ebegin "Playing power-on chime"
+
+	local chip
+	chip="$(find_buzzer_chip)" || { eend 0 "no pwmchip for ${BUZZER_ADDR}.pwm (skipped)"; return 0; }
+
+	# Export channel 0 (harmless/EBUSY if already exported); the pwmN dir may lag the write.
+	echo "$BUZZER_CHAN" > "$chip/export" 2>/dev/null
+	local chan="$chip/pwm$BUZZER_CHAN"
+	local i=0
+	while [ ! -d "$chan" ] && [ "$i" -lt 20 ]; do
+		sleep_ms 50
+		i=$((i + 1))
+	done
+	[ -d "$chan" ] || { eend 0 "buzzer channel did not appear (skipped)"; return 0; }
+
+	# Play the melody in the background so boot never waits on the buzzer.
+	(
+		for note in $MELODY; do
+			freq="${note%%:*}"
+			ms="${note##*:}"
+			period=$((1000000000 / freq))
+			duty=$((period / 2))          # 50% duty = loudest ratio the firmware uses
+
+			# Write duty=0 before the period so the core never sees duty>period.
+			echo 0 > "$chan/duty_cycle" 2>/dev/null
+			echo "$period" > "$chan/period" 2>/dev/null
+			echo "$duty" > "$chan/duty_cycle" 2>/dev/null
+			echo 1 > "$chan/enable" 2>/dev/null
+			sleep_ms "$ms"
+			echo 0 > "$chan/enable" 2>/dev/null
+			sleep_ms "$GAP_MS"
+		done
+	) &
+
+	eend 0
+}

@@ -1,0 +1,35 @@
+#!/bin/sh
+# ml-video-up - production launcher (rootfs track): start RF video
+# with NO SD card. ml-pipeline here is the standalone fully-static build (whole GStreamer + the
+# curated plugin set baked in), so there is no /mnt/gst, no gst-env, no plugin registry - none of the
+# squashfs machinery. The development equivalent is userspace/gstreamer/runtime/gst-rf-up.sh on /mnt/gst.
+#
+# Prerequisites come from the boot services and this rootfs: ml-display (the DRM broker + CRTC
+# modeset), ml-hud (the OSD overlay), the kernel modules (wave5, ml_dmablit, artosyn_vo, loaded via
+# modules-load.d) and the codec firmware. The RF daemon ml-linkd associates the link and gates the
+# video handshake; it is started here if not already running.
+#
+# Source arg: `rf` (the RF UDP downlink) is the default. RF chip bring-up (releasing the AR8030 from
+# reset) is a separate concern and must have happened before the link can associate.
+set -e
+
+[ -e /run/missinglynk/drm.sock ] || { echo "FATAL: no DRM broker (/run/missinglynk/drm.sock). Is ml-display up?"; exit 1; }
+[ -e /dev/ml-dmablit ] || echo "WARN: /dev/ml-dmablit absent -> CPU-blit fallback (~40 fps). Is ml_dmablit loaded?"
+
+# Start the RF daemon if it is not already up (bracket trick: busybox pgrep -f self-matches).
+if ! pgrep -f '[m]l-linkd' >/dev/null 2>&1; then
+    echo "ml-video-up: starting ml-linkd"
+    setsid ml-linkd >/var/log/ml-linkd.log 2>&1 < /dev/null &
+fi
+
+# dec_cap_bufs MUST be 0 (stock depth): any cap below the stream's fbc_buf_count (9) makes the
+# wave5 firmware spin on display-buffer-full - decode drops to ~25-40 fps with both cores pegged.
+# Force it here so no stale modprobe option can reintroduce the regression.
+[ -e /sys/module/wave5/parameters/dec_cap_bufs ] && echo 0 > /sys/module/wave5/parameters/dec_cap_bufs
+
+# Composite mode is the default use case: frees a plane for the OSD overlay and produces the frame
+# the DVR encodes. ML_HEAP defaults to the CMA heap in the binary; ml_dmablit gives 60 fps.
+# DVR records native 1080p60: requires the page-granular coherent-pool kernel (patch 0011);
+# on a power-of-2-pool kernel the encoder FBC ENOMEMs (0-byte file) - fall back to
+# ML_DVR_RES=720 ML_DVR_FPS=30 there.
+exec env ML_COMPOSE=1 ml-pipeline "${1:-rf}"

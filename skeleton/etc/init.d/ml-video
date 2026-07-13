@@ -1,0 +1,105 @@
+#!/sbin/openrc-run
+# RF video at boot: bring the AR8030 link up (the on-device equivalent of
+# glue/dev/rf-bringup.sh Phase 6), start ml-linkd (association + READY-gated
+# handshakes), then the standalone ml-pipeline via ml-video-up. Best-effort
+# throughout: any missing piece logs a warning and the boot continues.
+#
+# Bring-up order matters: the AR8030 sits in reset until gpio_pulse releases it,
+# and the SDIO host must (re)scan AFTER the release to enumerate the chip. The
+# coldplug bound dw_mci-artosyn (clk_sel/clk_cfg via modprobe.d) to both mmc
+# hosts long before this service, so the RF host is re-probed here (driver
+# unbind/bind) once the chip is out of reset - the per-host equivalent of the
+# validated "insmod after reset release" sequence, without touching the SD host.
+description="RF video: AR8030 bring-up + ml-linkd + ml-pipeline"
+
+GPIO_PULSE=/usr/local/bin/gpio_pulse
+LINKD=/usr/local/bin/ml-linkd
+VIDEO_UP=/usr/local/bin/ml-video-up
+RF_HOST=1b00000.mmc
+RF_DRIVER=/sys/bus/platform/drivers/dwmmc_artosyn
+
+depend() {
+	after modules mdev hwdrivers ml-display
+}
+
+rf_up() {
+	# Already up (restart of this service): leave the link alone - artosyn_sdio
+	# must NEVER be warm-reloaded (hangs the device).
+	if grep -q '^artosyn_sdio ' /proc/modules; then
+		einfo "ml-video: artosyn_sdio already loaded; skipping RF bring-up"
+		return 0
+	fi
+	if [ ! -x "$GPIO_PULSE" ]; then
+		ewarn "ml-video: $GPIO_PULSE missing - no RF bring-up"
+		return 1
+	fi
+
+	"$GPIO_PULSE" ar-gpio1 0 || { ewarn "ml-video: AR8030 reset release failed"; return 1; }
+
+	# Re-probe the RF host now that the chip is out of reset.
+	if [ -e "$RF_DRIVER/unbind" ] && [ -e "/sys/bus/platform/devices/$RF_HOST" ]; then
+		echo "$RF_HOST" > "$RF_DRIVER/unbind" 2>/dev/null
+		echo "$RF_HOST" > "$RF_DRIVER/bind" 2>/dev/null
+	fi
+
+	# Wait for the AR8030 SDIO function (device id 0x8030, ROM mode).
+	local i=0
+	while [ $i -lt 50 ]; do
+		grep -q 0x8030 /sys/bus/sdio/devices/*/device 2>/dev/null && break
+		sleep 0.2
+		i=$((i + 1))
+	done
+	if ! grep -q 0x8030 /sys/bus/sdio/devices/*/device 2>/dev/null; then
+		ewarn "ml-video: AR8030 never enumerated on SDIO"
+		return 1
+	fi
+
+	# Baseband firmware + config are baked into /lib/firmware by the rootfs build.
+	# NO tx_window: the chip never emits the 0xEE ACKs that would drain it (HW-proven);
+	# any finite value stalls the uplink.
+	modprobe artosyn_sdio fw_name=bb_demo_gnd_d.img cfg_name=bb_config_gnd.json.usr_cfg.json \
+		|| { ewarn "ml-video: artosyn_sdio load failed"; return 1; }
+
+	i=0
+	while [ $i -lt 50 ] && ! [ -e /sys/class/net/sdio0 ]; do
+		sleep 0.2
+		i=$((i + 1))
+	done
+	[ -e /sys/class/net/sdio0 ] || { ewarn "ml-video: no sdio0 interface"; return 1; }
+
+	ip link set sdio0 up
+	ip addr add 10.0.0.1/24 dev sdio0 2>/dev/null	# inetaddr notifier -> eth->ip_addr
+	return 0
+}
+
+start() {
+	ebegin "Starting RF video"
+
+	rf_up || ewarn "ml-video: RF bring-up incomplete (video will not flow; SSH + serial still work)"
+
+	if [ -x "$LINKD" ]; then
+		start-stop-daemon --start --background --make-pidfile \
+			--pidfile /run/ml-linkd.pid --exec "$LINKD" \
+			--stdout /var/log/ml-linkd.log --stderr /var/log/ml-linkd.log
+	else
+		ewarn "ml-video: $LINKD missing"
+	fi
+
+	if [ -x "$VIDEO_UP" ]; then
+		start-stop-daemon --start --background --make-pidfile \
+			--pidfile /run/ml-pipeline.pid \
+			--stdout /var/log/ml-pipeline.log --stderr /var/log/ml-pipeline.log \
+			--exec "$VIDEO_UP" -- rf
+	else
+		ewarn "ml-video: $VIDEO_UP missing"
+	fi
+
+	eend 0
+}
+
+stop() {
+	ebegin "Stopping RF video (link/driver stay up - never warm-reload artosyn_sdio)"
+	start-stop-daemon --stop --pidfile /run/ml-pipeline.pid 2>/dev/null
+	start-stop-daemon --stop --pidfile /run/ml-linkd.pid 2>/dev/null
+	eend 0
+}

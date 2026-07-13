@@ -1,0 +1,3 @@
+# Allow root password login (no -w)
+# Host keys are generated into /etc/dropbear on first boot by the package's init script.
+DROPBEAR_OPTS="-p 22"

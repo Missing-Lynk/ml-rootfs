@@ -1,0 +1,42 @@
+#!/sbin/openrc-run
+# Flight-session logger: follow the kernel ring buffer and sample /proc counters to the SD card, so
+# a session can be analysed after the fact. `after ml-sdcard`: needs /mnt/sdcard mounted; it skips
+# cleanly if the card is absent. Loads no modules and never blocks boot or the video path.
+#
+# Best-effort: a missing binary or unmounted card logs a warning and leaves the box otherwise up.
+description="Flight-session logger: kernel ring buffer + /proc stats to the SD card"
+
+LOGD=/usr/local/bin/ml-logd
+PIDFILE=/run/ml-logd.pid
+
+depend() {
+	after ml-sdcard
+}
+
+start() {
+	ebegin "Starting session logger"
+
+	if [ ! -x "$LOGD" ]; then
+		ewarn "ml-logd: $LOGD missing; skipping"
+		eend 0
+		return 0
+	fi
+	if ! mountpoint -q /mnt/sdcard; then
+		ewarn "ml-logd: /mnt/sdcard not mounted (no SD card?); skipping"
+		eend 0
+		return 0
+	fi
+
+	start-stop-daemon --start --background --make-pidfile --pidfile "$PIDFILE" \
+		--exec "$LOGD"
+
+	eend $?
+}
+
+stop() {
+	# SIGTERM (start-stop-daemon default) so ml-logd's trap stops the kmsg follower and clears
+	# /run/ml-log.dir on the way out.
+	ebegin "Stopping session logger"
+	start-stop-daemon --stop --pidfile "$PIDFILE" 2>/dev/null
+	eend 0
+}

@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+# Best-effort one-shot NTP sync. The device has a battery-backed RTC (loaded into the
+# system clock at boot by the `hwclock` service), so time is already sane offline; this
+# just corrects RTC drift when the internet happens to be reachable and then writes the
+# corrected time back to the RTC so the fix persists across power cycles. It does NOTHING
+# (no daemon, no retries, zero steady-state load) when offline - the normal case here.
+description="Best-effort one-shot NTP sync, persisted to the RTC (offline-safe)"
+
+depend() {
+	after net hwclock
+}
+
+start() {
+	ebegin "Syncing clock over NTP (best-effort, background)"
+	# busybox `ntpd -q` sets the system clock once then exits (0 on success). `timeout`
+	# guarantees it gives up quickly when offline; backgrounding means boot never blocks
+	# on the network. On success, push the corrected time into the RTC with `hwclock -w`.
+	( timeout 30 ntpd -n -q -p pool.ntp.org >/dev/null 2>&1 && hwclock -w >/dev/null 2>&1 ) &
+	eend 0
+}

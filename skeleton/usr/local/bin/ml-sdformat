@@ -1,0 +1,45 @@
+#!/bin/sh
+# Format the external SD card as one whole-device filesystem and remount it at /mnt/sdcard. exFAT by
+# default (no 4 GB per-file limit); FAT32 if mkfs.exfat is absent. Run by the DVR menu's Format action
+# after its confirm. Only mmcblk1+ (external SD) is written; mmcblk0 is internal and never touched.
+set -u
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin:$PATH
+FS="${1:-exFAT}"
+MNT=/mnt/sdcard
+
+DEV=""
+for n in 1 2 3 4 5 6 7 8 9; do
+	if [ -b "/dev/mmcblk${n}" ]; then
+		DEV="/dev/mmcblk${n}"
+		break
+	fi
+done
+[ -n "$DEV" ] || { echo "ml-sdformat: no external SD (mmcblk1+)"; exit 1; }
+echo "ml-sdformat: formatting $DEV as $FS"
+
+umount "$MNT" 2>/dev/null
+umount -l "$MNT" 2>/dev/null
+sync
+
+# Abort rather than risk corruption if an open writer still holds the device.
+if grep -q "^${DEV}" /proc/mounts; then
+	echo "ml-sdformat: $DEV still in use, aborting"
+	exit 1
+fi
+
+# Wipe the partition table + stale FS signatures so any prior layout converges to one clean result.
+dd if=/dev/zero of="$DEV" bs=1M count=8 2>/dev/null
+sync
+
+if [ "$FS" = "exFAT" ] && command -v mkfs.exfat >/dev/null; then
+	mkfs.exfat -L SDCARD "$DEV" || { echo "ml-sdformat: mkfs.exfat failed"; exit 1; }
+else
+	mkfs.vfat -F 32 -n SDCARD "$DEV" || { echo "ml-sdformat: mkfs.vfat failed"; exit 1; }
+fi
+sync
+sleep 1
+
+mkdir -p "$MNT"
+mount "$DEV" "$MNT" || { echo "ml-sdformat: remount failed"; exit 1; }
+echo "ml-sdformat: done"
+exit 0

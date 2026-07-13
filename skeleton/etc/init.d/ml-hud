@@ -1,0 +1,54 @@
+#!/sbin/openrc-run
+# Start the HUD (menu + BTFL OSD + System OSD) on the DRM overlay plane.
+#
+# `after ml-display`: it anchors the DRM broker (drm.sock) and the CRTC modeset; we wait for the
+# socket before starting. `after ... hwdrivers`: the coldplug has loaded artosyn_adc, so
+# /dev/input/event0 (keypad) and the battery ADC channel exist. This service loads no modules.
+#
+# Best-effort: a missing binary/socket/driver logs a warning and leaves the box otherwise up.
+description="HUD: menu + OSD on the DRM overlay"
+
+HUD=/usr/local/bin/ml-hud
+FONT=/usr/local/share/hud/font_BTFL_hd.png
+SOCK=/run/missinglynk/drm.sock
+PIDFILE=/run/ml-hud.pid
+PLANE=38
+PORT=10000
+
+depend() {
+	after ml-display modules mdev hwdrivers
+}
+
+start() {
+	ebegin "Starting HUD"
+
+	if [ ! -x "$HUD" ]; then
+		ewarn "ml-hud: $HUD missing (build hud/ and stage it); skipping"
+		eend 0
+		return 0
+	fi
+
+	# Wait for the broker socket (ml-display brings it up just ahead of us).
+	local i=0
+	while [ ! -S "$SOCK" ] && [ $i -lt 50 ]; do
+		sleep 0.1
+		i=$((i + 1))
+	done
+	if [ ! -S "$SOCK" ]; then
+		ewarn "ml-hud: $SOCK never appeared (is ml-display up?); starting anyway, HUD will retry"
+	fi
+
+	start-stop-daemon --start --background --make-pidfile --pidfile "$PIDFILE" \
+		--exec "$HUD" -- --drm "$PLANE" --bind 0.0.0.0 --port "$PORT" --idle-ms 0 \
+		--btfl-font "$FONT"
+
+	eend $?
+}
+
+stop() {
+	# SIGTERM (start-stop-daemon default) so the HUD runs its cleanup and frees its DRM overlay
+	# buffer - a SIGKILL would leak it into the broker's shared drm_file.
+	ebegin "Stopping HUD"
+	start-stop-daemon --stop --pidfile "$PIDFILE" 2>/dev/null
+	eend 0
+}
