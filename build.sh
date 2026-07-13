@@ -330,7 +330,7 @@ fi
 # native/build.sh) and wdt-reset (watchdog reset so the SPL boots the active slot; built from
 # glue/boot/wdt-reset.c). Both aarch64 static. Skipped if absent.
 MTDTOOL_BIN="$HERE/../native/mtdtool"
-WDTRESET_BIN="$HERE/../glue/boot/wdt-reset"
+WDTRESET_BIN="$HERE/../glue/build/wdt-reset"
 # name|path|build-hint (mtdtool from the native gcc:7 container; wdt-reset from the glue Makefile)
 for entry in "mtdtool|$MTDTOOL_BIN|native/build.sh" "wdt-reset|$WDTRESET_BIN|make -C glue"; do
   name="${entry%%|*}"; rest="${entry#*|}"
