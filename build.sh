@@ -271,8 +271,8 @@ else
 fi
 
 # HUD (ml-hud service): the static menu+OSD binary, its BTFL glyph font, and the i18n catalogs,
-# staged to /usr/local/{bin,share}. Skipped if hud/build/hud is absent.
-HUD_BIN="$US/hud/build/hud"
+# staged to /usr/local/{bin,share}. Skipped if ml-hud/build/hud is absent.
+HUD_BIN="$US/ml-hud/build/hud"
 if [ -f "$HUD_BIN" ]; then
   mkdir -p "$STAGE/usr/local/bin" "$STAGE/usr/local/share/hud/lang"
   install -m 0755 "$HUD_BIN" "$STAGE/usr/local/bin/ml-hud"
@@ -284,10 +284,10 @@ if [ -f "$HUD_BIN" ]; then
     log "hud: $BTFL_FONT absent (generate with userspace/assets/osd-fonts/mcm2png.py); skipping font"
   fi
 
-  install -m 0644 "$US"/hud/lang/*.lang "$STAGE/usr/local/share/hud/lang/"
+  install -m 0644 "$US"/ml-hud/lang/*.lang "$STAGE/usr/local/share/hud/lang/"
   log "hud: staged ml-hud + lang -> /usr/local/{bin,share}/"
 else
-  log "hud: $HUD_BIN absent (build with userspace/hud/tools/deploy.sh); skipping"
+  log "hud: $HUD_BIN absent (build with userspace/ml-hud/tools/deploy.sh); skipping"
 fi
 
 # Video (production track): the standalone fully-static ml-pipeline

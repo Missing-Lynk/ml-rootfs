@@ -13,7 +13,6 @@ FONT=/usr/local/share/hud/font_BTFL_hd.png
 SOCK=/run/missinglynk/drm.sock
 PIDFILE=/run/ml-hud.pid
 PLANE=38
-PORT=10000
 
 depend() {
 	after ml-display modules mdev hwdrivers
@@ -40,7 +39,7 @@ start() {
 
 	start-stop-daemon --start --background --make-pidfile --pidfile "$PIDFILE" \
 		--stdout /var/log/ml-hud.log --stderr /var/log/ml-hud.log \
-		--exec "$HUD" -- --drm "$PLANE" --bind 0.0.0.0 --port "$PORT" --idle-ms 0 \
+		--exec "$HUD" -- --drm "$PLANE" --idle-ms 0 \
 		--btfl-font "$FONT"
 
 	eend $?
