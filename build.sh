@@ -133,7 +133,7 @@ else
 fi
 
 # Fail early on an incomplete profile rather than midway through the build.
-for v in HOSTNAME ROOT_PASS GADGET_IP GADGET_CIDR HOST_GW DEV_MAC HOST_MAC \
+for v in HOSTNAME ROOT_PASS GADGET_IP GADGET_CIDR HOST_GW DEV_MAC HOST_MAC USB_PRODUCT \
          PARTITION PARTITION_PEBS PEB_SIZE MIN_IO SUBPAGE LEB_SIZE MAX_LEB_COUNT; do
   [ -n "${!v:-}" ] || die "device config $DEVICE_CONF: missing $v"
 done
@@ -331,7 +331,7 @@ fi
 # Slot-switch helpers for the HUD's "Switch to Slot A" action: mtdtool (flips the gpt0 active bit;
 # native/build.sh) and wdt-reset (watchdog reset so the SPL boots the active slot; built from
 # glue/boot/wdt-reset.c). Both aarch64 static. Skipped if absent.
-MTDTOOL_BIN="$HERE/../native/mtdtool"
+MTDTOOL_BIN="$HERE/../native/build/mtdtool"
 WDTRESET_BIN="$HERE/../glue/build/wdt-reset"
 # name|path|build-hint (mtdtool from the native gcc:7 container; wdt-reset from the glue Makefile)
 for entry in "mtdtool|$MTDTOOL_BIN|native/build.sh" "wdt-reset|$WDTRESET_BIN|make -C glue"; do
@@ -359,6 +359,20 @@ else
   log "ml-ledd: $LEDD_BIN absent (build with make -C userspace ledd); skipping"
 fi
 
+# umtprd (started by the usb-gadget service): the uMTP-Responder MTP daemon that exposes the
+# SD-card DVR recordings over USB (ml-kernel issue #5). Static aarch64 musl build from the
+# wrapper's native/umtprd/build.sh (a separate `make umtprd` - it clones upstream, so it is not
+# part of `make native`/`all`). Staged if built; the gadget service falls back to ECM-only at
+# boot otherwise, so MTP being absent never affects ECM/SSH.
+UMTPRD_BIN="$HERE/../native/umtprd/build/umtprd"
+if [ -f "$UMTPRD_BIN" ]; then
+  mkdir -p "$STAGE/usr/local/bin"
+  install -m 0755 "$UMTPRD_BIN" "$STAGE/usr/local/bin/umtprd"
+  log "mtp: staged umtprd -> /usr/local/bin/umtprd"
+else
+  log "mtp: $UMTPRD_BIN absent (build with 'make umtprd'); MTP gadget will fall back to ECM-only"
+fi
+
 echo "$HOSTNAME" > "$STAGE/etc/hostname"
 
 cat > "$STAGE/etc/hosts" <<EOF
@@ -372,15 +386,21 @@ $ALPINE_CDN/latest-stable/main
 $ALPINE_CDN/latest-stable/community
 EOF
 
-# Template the device addressing into the gadget service (skeleton/etc/init.d/usb-gadget).
+# Template the device addressing + USB product name into the gadget service
+# (skeleton/etc/init.d/usb-gadget).
 sed -i \
   -e "s|@DEV_MAC@|$DEV_MAC|" \
   -e "s|@HOST_MAC@|$HOST_MAC|" \
   -e "s|@GADGET_IP@|$GADGET_IP|" \
   -e "s|@GADGET_CIDR@|$GADGET_CIDR|" \
   -e "s|@HOST_GW@|$HOST_GW|" \
+  -e "s|@USB_PRODUCT@|$USB_PRODUCT|" \
   "$STAGE/etc/init.d/usb-gadget"
 chmod 0755 "$STAGE/etc/init.d/usb-gadget"
+
+# Template the same USB product name into the MTP responder config so the MTP-level device
+# name matches the USB descriptor (skeleton/etc/umtprd.conf).
+[ -f "$STAGE/etc/umtprd.conf" ] && sed -i -e "s|@USB_PRODUCT@|$USB_PRODUCT|" "$STAGE/etc/umtprd.conf"
 
 # Precompute the root password hash (fixed salt -> reproducible /etc/shadow line).
 ROOT_HASH="$(openssl passwd -6 -salt artlynkopen "$ROOT_PASS")"

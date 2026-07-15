@@ -1,7 +1,14 @@
 #!/sbin/openrc-run
-# Bring up a USB CDC-ECM gadget on the dwc2 UDC and address the device-side interface.
+# Bring up the USB composite gadget on the dwc2 UDC and address the device-side interface.
+# Interfaces: CDC-ECM (network/SSH, always) + optional MTP (DVR recordings, best-effort).
 # Addressing (@DEV_MAC@ etc.) is templated in from build.sh at image-build time.
-description="USB ECM network gadget (configfs)"
+#
+# MTP is an ADDITIONAL interface on the same composite (ml-kernel #5), not a replacement: it
+# needs FunctionFS descriptors written by umtprd BEFORE the UDC is bound, so its bring-up is
+# inlined here (a separate service can't interleave a single ordered start()). It is strictly
+# best-effort and bounded: if umtprd is absent, disabled, or not ready within MTP_READY_DECISEC,
+# we strip the MTP function and bind ECM-only. MTP must never cost us SSH.
+description="USB composite gadget: CDC-ECM (net) + optional MTP (recordings)"
 
 # Provide "net" so dropbear's `need net` resolves; this is the only network on the box.
 depend() {
@@ -20,10 +27,84 @@ GADGET_IP="@GADGET_IP@"
 GADGET_CIDR="@GADGET_CIDR@"
 HOST_GW="@HOST_GW@"
 
+# --- MTP (FunctionFS) knobs ---------------------------------------------------------------
+UMTPRD="/usr/local/bin/umtprd"
+UMTPRD_CONF="/etc/umtprd.conf"
+MTP_DISABLE="/etc/ml-mtp.disabled"   # touch this file to force ECM-only
+FFS_MNT="/dev/ffs-mtp"               # must match umtprd.conf usb_ffs_endpoints + ffs.<name>
+MTP_STORAGE="/mnt/sdcard"            # must match umtprd.conf storage path
+MTP_PID="/run/ml-mtp.pid"
+MTP_LOG="/run/ml-mtp.log"
+MTP_READY_DECISEC=50                 # readiness timeout: 50 * 0.1s = 5s, then degrade to ECM-only
+
+# Bring up the MTP FunctionFS function and umtprd, leaving the ffs.mtp function linked into c.1
+# and its descriptors written, ready for the UDC bind. Returns 0 if MTP is ready, 1 otherwise
+# (in which case any partial MTP state is torn down so it cannot block the ECM UDC bind).
+setup_mtp() {
+	[ -x "$UMTPRD" ]      || { einfo "MTP: $UMTPRD not installed; ECM-only"; return 1; }
+	[ -f "$UMTPRD_CONF" ] || { einfo "MTP: $UMTPRD_CONF missing; ECM-only"; return 1; }
+	[ -e "$MTP_DISABLE" ] && { einfo "MTP: disabled ($MTP_DISABLE present); ECM-only"; return 1; }
+
+	# Storage root must exist even with no SD card. ml-sdcard mkdir's it too, but usb-gadget may
+	# run first; an empty dir is a valid (empty) MTP storage - the file list appears once a card
+	# mounts on top. (Graceful no-SD handling.)
+	mkdir -p "$MTP_STORAGE" 2>/dev/null || true
+
+	mkdir -p "$G/functions/ffs.mtp" || { ewarn "MTP: cannot create ffs.mtp function"; return 1; }
+
+	mkdir -p "$FFS_MNT"
+	if ! mountpoint -q "$FFS_MNT"; then
+		mount -t functionfs mtp "$FFS_MNT" 2>/dev/null || {
+			ewarn "MTP: functionfs mount failed"; teardown_mtp; return 1; }
+	fi
+
+	# umtprd opens $FFS_MNT/ep0 and writes the MTP descriptors + strings; the kernel then creates
+	# ep1/ep2, which is our readiness signal. Run in the background, capture output, record the PID.
+	( exec "$UMTPRD" -conf "$UMTPRD_CONF" >>"$MTP_LOG" 2>&1 ) &
+	echo $! > "$MTP_PID"
+
+	local i=0
+	while [ "$i" -lt "$MTP_READY_DECISEC" ]; do
+		# umtprd died? (e.g. bad conf) -> give up on MTP, keep ECM.
+		kill -0 "$(cat "$MTP_PID" 2>/dev/null)" 2>/dev/null || {
+			ewarn "MTP: umtprd exited during startup (see $MTP_LOG); ECM-only"; teardown_mtp; return 1; }
+		[ -e "$FFS_MNT/ep1" ] && break
+		i=$((i + 1))
+		sleep 0.1
+	done
+	[ -e "$FFS_MNT/ep1" ] || {
+		ewarn "MTP: umtprd not ready in $((MTP_READY_DECISEC / 10))s; ECM-only"; teardown_mtp; return 1; }
+
+	# Descriptors are written; now link the function into the config so it enumerates at UDC bind.
+	ln -sf "$G/functions/ffs.mtp" "$G/configs/c.1/" 2>/dev/null || true
+	einfo "MTP: ready (umtprd pid $(cat "$MTP_PID" 2>/dev/null), storage $MTP_STORAGE)"
+	return 0
+}
+
+# Unwind MTP: unlink from the config, stop umtprd, unmount functionfs, remove the function.
+# Safe to call at any partial state (each step is guarded). Order matters: the ffs.mtp function
+# dir cannot be removed while functionfs is mounted / umtprd holds it.
+teardown_mtp() {
+	rm -f "$G/configs/c.1/ffs.mtp" 2>/dev/null || true
+	if [ -f "$MTP_PID" ]; then
+		kill "$(cat "$MTP_PID" 2>/dev/null)" 2>/dev/null || true
+		rm -f "$MTP_PID"
+	fi
+	# umtprd may hold the mount briefly after SIGTERM; a couple of retries avoid a stuck rmdir.
+	local i=0
+	while mountpoint -q "$FFS_MNT" 2>/dev/null; do
+		umount "$FFS_MNT" 2>/dev/null && break
+		[ "$i" -ge 10 ] && break
+		i=$((i + 1))
+		sleep 0.1
+	done
+	rmdir "$G/functions/ffs.mtp" 2>/dev/null || true
+}
+
 # Probing below: tolerate transient absence of the UDC / netdev, so do not let a single
 # failed read abort the whole service. Hard errors are reported explicitly.
 start() {
-	ebegin "Configuring USB ECM gadget"
+	ebegin "Configuring USB composite gadget (ECM + MTP)"
 
 	if ! mountpoint -q "$CONFIGFS"; then
 		modprobe configfs 2>/dev/null || true
@@ -35,11 +116,11 @@ start() {
 	echo 0x1d6b > "$G/idVendor"      # Linux Foundation
 	echo 0x0104 > "$G/idProduct"     # Multifunction Composite Gadget
 	echo 0x0200 > "$G/bcdUSB"
-	echo 0x0100 > "$G/bcdDevice"
+	echo 0x0101 > "$G/bcdDevice"     # bumped from 0x0100: composite now carries MTP; hosts re-read
 
 	mkdir -p "$G/strings/0x409"
 	echo "missinglynk"            > "$G/strings/0x409/manufacturer"
-	echo "Artosyn device (open)"  > "$G/strings/0x409/product"
+	echo "@USB_PRODUCT@"          > "$G/strings/0x409/product"
 	echo "0001"                   > "$G/strings/0x409/serialnumber"
 
 	# ECM function with FIXED MACs (stable host ifname across reboots).
@@ -48,9 +129,13 @@ start() {
 	echo "$HOST_MAC" > "$G/functions/ecm.usb0/host_addr"
 
 	mkdir -p "$G/configs/c.1/strings/0x409"
-	echo "CDC ECM" > "$G/configs/c.1/strings/0x409/configuration"
-	echo 250       > "$G/configs/c.1/MaxPower"
+	echo "CDC ECM + MTP" > "$G/configs/c.1/strings/0x409/configuration"
+	echo 250             > "$G/configs/c.1/MaxPower"
 	ln -sf "$G/functions/ecm.usb0" "$G/configs/c.1/" 2>/dev/null || true
+
+	# MTP: best-effort, bounded. On any failure it degrades to ECM-only (setup_mtp cleans up
+	# after itself). ECM stays linked either way, so SSH is never at the mercy of MTP.
+	setup_mtp || true
 
 	# Bind to the (single) dwc2 UDC. On the Artosyn SoC this is "8000000.usb".
 	local udc=""
@@ -62,7 +147,12 @@ start() {
 		sleep 0.2
 	done
 	[ -n "$udc" ] || { eend 1 "no UDC in /sys/class/udc"; return 1; }
-	echo "$udc" > "$G/UDC" || { eend 1 "failed to bind UDC $udc"; return 1; }
+	if ! echo "$udc" > "$G/UDC"; then
+		# The bind can fail if MTP left the composite in a bad state; retry ECM-only once.
+		ewarn "UDC bind failed with MTP linked; retrying ECM-only"
+		teardown_mtp
+		echo "$udc" > "$G/UDC" || { eend 1 "failed to bind UDC $udc"; return 1; }
+	fi
 
 	# The device-side netdev appears after binding. Prefer the function's reported
 	# ifname; fall back to scanning for a usb* interface.
@@ -93,8 +183,10 @@ start() {
 }
 
 stop() {
-	ebegin "Tearing down USB ECM gadget"
+	ebegin "Tearing down USB composite gadget"
+	# Unbind the UDC first so no function is live, then unwind MTP, then ECM.
 	[ -e "$G/UDC" ] && echo "" > "$G/UDC" 2>/dev/null || true
+	teardown_mtp
 	rm -f "$G/configs/c.1/ecm.usb0" 2>/dev/null || true
 	rmdir "$G/configs/c.1/strings/0x409" 2>/dev/null || true
 	rmdir "$G/configs/c.1" 2>/dev/null || true
