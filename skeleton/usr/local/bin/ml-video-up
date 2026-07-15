@@ -28,14 +28,14 @@ fi
 [ -e /sys/module/wave5/parameters/dec_cap_bufs ] && echo 0 > /sys/module/wave5/parameters/dec_cap_bufs
 
 # Composite mode is the default use case: frees a plane for the OSD overlay and produces the frame
-# the DVR encodes. ML_HEAP defaults to the CMA heap in the binary; ml_dmablit gives 60 fps.
+# the DVR encodes. ML_HEAP defaults to the mmz heap in the binary (ml_mmzheap.ko, the WC carveout
+# shared with the wave5 codec; CMA-heap fallback when absent); ml_dmablit gives 60 fps.
 # DVR records native 1080p60: requires the page-granular coherent-pool kernel (patch 0011);
 # on a power-of-2-pool kernel the encoder FBC ENOMEMs (0-byte file) - fall back to
 # ML_DVR_RES=720 ML_DVR_FPS=30 there.
 #
-# Cap the composite pool (ML_COMP_MAX): uncapped it greedily grabs CMA buffers until the heap is
-# exhausted, leaving nothing for the HUD's overlay - a boot-time race the HUD (or, once it wins,
-# the pipeline's own runtime allocations) loses. ~10 x 3 MiB fits the pool, the HUD overlay, and
-# runtime headroom in the 56 MiB CMA, and stays above the 5-buffer floor for smooth 60 fps.
-# Override with ML_COMP_MAX to retune per board.
+# Cap the composite pool (ML_COMP_MAX): the mmz pool is shared with the wave5 decoders (~52 MiB
+# for two) and the DVR encoder, so an uncapped greedy grab starves the codec; on the CMA fallback
+# it starves the HUD overlay and runtime DMA instead. 10 x ~3.1 MiB leaves both pools headroom
+# and stays above the 5-buffer floor for smooth 60 fps. Override with ML_COMP_MAX to retune.
 exec env ML_COMPOSE=1 ML_COMP_MAX="${ML_COMP_MAX:-10}" ml-pipeline "${1:-rf}"
