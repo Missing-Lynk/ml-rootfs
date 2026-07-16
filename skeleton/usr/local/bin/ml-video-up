@@ -28,14 +28,16 @@ fi
 [ -e /sys/module/wave5/parameters/dec_cap_bufs ] && echo 0 > /sys/module/wave5/parameters/dec_cap_bufs
 
 # Composite mode is the default use case: frees a plane for the OSD overlay and produces the frame
-# the DVR encodes. ML_HEAP defaults to the mmz heap in the binary (ml_mmzheap.ko, the WC carveout
-# shared with the wave5 codec; CMA-heap fallback when absent); ml_dmablit gives 60 fps.
+# the DVR encodes. ML_HEAP is pinned to the CMA heap here: the binary defaults to the mmz heap
+# (ml_mmzheap.ko), but the wave5 ENCODER importing mmz-heap composite dmabufs produces a 0-byte
+# recording and wedges the VPU command queue (persistent "result not ready: 0x800"; power cycle to
+# recover) - HW-bisected via this very variable. Keep CMA until that import path is fixed.
 # DVR records native 1080p60: requires the page-granular coherent-pool kernel (patch 0011);
 # on a power-of-2-pool kernel the encoder FBC ENOMEMs (0-byte file) - fall back to
 # ML_DVR_RES=720 ML_DVR_FPS=30 there.
 #
-# Cap the composite pool (ML_COMP_MAX): the mmz pool is shared with the wave5 decoders (~52 MiB
-# for two) and the DVR encoder, so an uncapped greedy grab starves the codec; on the CMA fallback
-# it starves the HUD overlay and runtime DMA instead. 10 x ~3.1 MiB leaves both pools headroom
-# and stays above the 5-buffer floor for smooth 60 fps. Override with ML_COMP_MAX to retune.
-exec env ML_COMPOSE=1 ML_COMP_MAX="${ML_COMP_MAX:-10}" ml-pipeline "${1:-rf}"
+# Cap the composite pool (ML_COMP_MAX): the CMA heap is shared with the HUD overlay and runtime
+# DMA (and on the mmz heap it would share with the wave5 decoders and the DVR encoder), so an
+# uncapped greedy grab starves them. 10 x ~3.1 MiB leaves headroom and stays above the 5-buffer
+# floor for smooth 60 fps. Override with ML_COMP_MAX to retune.
+exec env ML_HEAP="${ML_HEAP:-default_cma_region}" ML_COMPOSE=1 ML_COMP_MAX="${ML_COMP_MAX:-10}" ml-pipeline "${1:-rf}"
