@@ -27,8 +27,8 @@ depend() {
 start() {
 	ebegin "Bringing up display"
 
-	# ar_dtbo_sdio (modules-load.d) creates the a10a000.gpio node the panel reset line uses; wait
-	# for the coldplug to finish binding the chain.
+	# The coldplug binds artosyn_gpio (the panel reset line) and the display chain
+	# from their DT nodes; wait for it to finish.
 	local i=0
 	while [ ! -e /dev/dri/card0 ] && [ $i -lt 50 ]; do
 		sleep 0.1
