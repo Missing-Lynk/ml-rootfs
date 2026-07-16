@@ -11,6 +11,13 @@
 # detect. This is a network-independent way in when the USB gadget net does not enumerate.
 ttyS0::respawn:/sbin/getty -L 1152000 ttyS0 vt100
 
+# Recovery console on the single USB CDC-ACM port (acm.GS0, host /dev/ttyACM*). A login shell
+# over USB even when the ECM/IP path is down, without opening the case. ttyGS0 only exists after
+# usb-gadget binds the UDC (boot runlevel); until then getty fails fast and init's own
+# respawn-too-fast throttle self-limits the retries. Baud is cosmetic on a gadget tty. (When the
+# configurator daemon lands it will take this port over on client connect; getty holds it until then.)
+ttyGS0::respawn:/sbin/getty -L 115200 ttyGS0 vt100
+
 # Reboot / shutdown handling.
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/sbin/openrc shutdown
