@@ -68,6 +68,13 @@ for svc in mdev hwdrivers modules; do
   [ -e "$ROOT/etc/init.d/$svc" ] && ln -sf "/etc/init.d/$svc" "$ROOT/etc/runlevels/boot/$svc"
 done
 
+# /usrdata (the usr_data UBI volume), in the boot runlevel ahead of every ml-* service: it is the
+# only persistent store, so the HUD's settings and the RF band marker are unreadable without it.
+# The kernel attaches only the rootfs UBI from the bootargs, so this service attaches usr_data too.
+if [ -e "$ROOT/etc/init.d/ml-usrdata" ]; then
+  ln -sf /etc/init.d/ml-usrdata "$ROOT/etc/runlevels/boot/ml-usrdata"
+fi
+
 # Status LED indicator, in the boot runlevel (earlier than the default-runlevel ml-* daemons) so
 # breathe-red is one of the first signs of life. `after devfs` is enough: it needs only /run
 # (sysinit) and /dev/spidev* (built-in SPI, present once devtmpfs mounts). Best-effort, backgrounded.

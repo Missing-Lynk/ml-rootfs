@@ -7,12 +7,25 @@ description="RF video: AR8030 bring-up + ml-linkd + ml-pipeline"
 
 RF_BRINGUP=/usr/local/bin/ml-rf-bringup
 RF_FW=bb_demo_gnd_d.img                     # baseband firmware in /lib/firmware (staged by rootfs build)
-RF_CFG=bb_config_gnd.json.usr_cfg.json      # its ground-side config, same dir
+RF_CFG_RACE=bb_config_gnd.json.usr_cfg.json     # race band, 16 channels: its ground-side config, same dir
+RF_CFG_NORMAL=bb_config_gnd.json.normal_cfg.json  # normal band, 3 channels: same blob, chan_valid_bmp rewritten
+RF_BAND_MARKER=/usrdata/missinglynk/rf-band     # "normal" selects the normal band; absent/anything else = race
 LINKD=/usr/local/bin/ml-linkd
 VIDEO_UP=/usr/local/bin/ml-video-up
 
 depend() {
 	after modules mdev hwdrivers ml-display
+}
+
+# The band (Normal/Race) is the config's chan_valid_bmp and only reaches the chip at firmware
+# upload, so it is chosen here, once per boot, and a band change needs a reboot to take effect.
+rf_cfg() {
+	if [ "$(cat "$RF_BAND_MARKER" 2>/dev/null)" = "normal" ] &&
+	   [ -f "/lib/firmware/$RF_CFG_NORMAL" ]; then
+		echo "$RF_CFG_NORMAL"
+	else
+		echo "$RF_CFG_RACE"
+	fi
 }
 
 rf_up() {
@@ -25,7 +38,9 @@ rf_up() {
 		return 1
 	fi
 
-	"$RF_BRINGUP" "$RF_FW" "$RF_CFG"
+	cfg=$(rf_cfg)
+	einfo "ml-video: RF band config $cfg"
+	"$RF_BRINGUP" "$RF_FW" "$cfg"
 }
 
 start() {

@@ -1,0 +1,64 @@
+#!/sbin/openrc-run
+# Mount the usr_data partition at /usrdata: the persistent, slot-independent store the open stack
+# keeps its settings and markers in (/usrdata/hud/settings.json, /usrdata/missinglynk/*).
+#
+# The kernel only attaches the UBI devices named in the ubi.mtd= bootargs (just the rootfs on
+# userapp1), and this rootfs has neither mtd-utils nor busybox's UBI applets, so the attach is done
+# here with mtdtool. usr_data is a SINGLETON partition shared with stock slot A: it holds the
+# vendor's own config (lowdelay/), so it is mounted, never formatted, and only ever added to.
+#
+# Best-effort: if any step fails the boot continues with no /usrdata, which costs persistence
+# (settings fall back to their defaults) but nothing else.
+description="Mount /usrdata (usr_data UBI volume)"
+
+MTDTOOL=/usr/local/bin/mtdtool
+UBI_NUM=1                # ubi0 is the rootfs (attached from the ubi.mtd= bootarg)
+UBI_VOL=usrdata          # the single volume inside usr_data
+MOUNT_POINT=/usrdata
+
+depend() {
+	before ml-display ml-hud ml-video
+	after modules
+}
+
+start() {
+	ebegin "Mounting $MOUNT_POINT"
+
+	if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+		eend 0 && return 0
+	fi
+
+	if [ ! -x "$MTDTOOL" ]; then
+		ewarn "ml-usrdata: $MTDTOOL missing - no persistent /usrdata"
+		eend 0
+		return 0
+	fi
+
+	# usr_data's mtd index is not fixed (it moves with the partition table), so find it by name.
+	mtd=$(grep '"usr_data"' /proc/mtd | cut -d: -f1 | tr -d 'mtd')
+	if [ -z "$mtd" ]; then
+		ewarn "ml-usrdata: no usr_data partition in /proc/mtd - no persistent /usrdata"
+		eend 0
+		return 0
+	fi
+
+	# Idempotent: an already-attached MTD reports EEXIST and mtdtool treats that as success, so a
+	# service restart re-mounts rather than failing.
+	"$MTDTOOL" attach "$mtd" "$UBI_NUM" >/dev/null 2>&1
+
+	mkdir -p "$MOUNT_POINT"
+	if ! mount -t ubifs "ubi${UBI_NUM}:${UBI_VOL}" "$MOUNT_POINT" 2>/dev/null; then
+		ewarn "ml-usrdata: mount ubi${UBI_NUM}:${UBI_VOL} failed - no persistent /usrdata"
+		eend 0
+		return 0
+	fi
+
+	eend 0
+}
+
+stop() {
+	ebegin "Unmounting $MOUNT_POINT"
+	umount "$MOUNT_POINT" 2>/dev/null
+	"$MTDTOOL" detach "$UBI_NUM" 2>/dev/null
+	eend 0
+}

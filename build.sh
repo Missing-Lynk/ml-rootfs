@@ -242,7 +242,19 @@ if [ -f "$RF_FW" ] && [ -f "$RF_CFG" ]; then
   mkdir -p "$STAGE/lib/firmware"
   cp "$RF_FW"  "$STAGE/lib/firmware/bb_demo_gnd_d.img"
   cp "$RF_CFG" "$STAGE/lib/firmware/bb_config_gnd.json.usr_cfg.json"
-  log "RF firmware: staged bb_demo_gnd_d.img + bb_config_gnd.json.usr_cfg.json -> /lib/firmware/"
+
+  # The Normal/Race band is the config's chan_valid_bmp, which only enters the chip at firmware
+  # upload, so each band is a whole config blob and switching one costs a boot. The captured blob
+  # is a race-mode one (0x0007FFF8 = table indices 3..18); derive the normal variant (0x00000007 =
+  # 5758/5788/5828) by rewriting that one field. ml-video picks between the two at boot.
+  sed 's/"chan_valid_bmp":\([[:space:]]*\)"0x0007FFF8"/"chan_valid_bmp":\1"0x00000007"/I' \
+      "$RF_CFG" > "$STAGE/lib/firmware/bb_config_gnd.json.normal_cfg.json"
+  if ! grep -qi '"chan_valid_bmp":[[:space:]]*"0x00000007"' \
+        "$STAGE/lib/firmware/bb_config_gnd.json.normal_cfg.json"; then
+    die "RF firmware: chan_valid_bmp not rewritten in $RF_CFG - normal-band config would be a race blob"
+  fi
+
+  log "RF firmware: staged bb_demo_gnd_d.img + race/normal configs -> /lib/firmware/"
 else
   log "RF firmware: $RF_FW / $RF_CFG absent; RF bring-up will push them at runtime (glue/dev/rf-bringup.sh -> /run/ml/fw)"
 fi
