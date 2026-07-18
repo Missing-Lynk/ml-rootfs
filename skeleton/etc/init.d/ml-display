@@ -19,6 +19,22 @@ SPLASH=/usr/local/bin/ml-splash
 IMAGE=/usr/local/share/nosignal.yuv
 PIDFILE=/run/ml-drmfd.pid
 SOCK=/run/missinglynk/drm.sock
+BL=/sys/class/backlight/backlight
+HUD_SETTINGS=/usrdata/hud/settings.json
+
+# Set the brightness level from the persisted HUD setting (goggles.brightness, a percent)
+# using ml-hud's percent-to-level mapping, so the first light-up is already at the user's
+# level and ml-hud's later re-apply is a no-op. No setting (or no file) keeps the driver
+# default.
+apply_saved_brightness() {
+	local pct level max
+	pct="$(sed -n 's/.*"brightness"[^0-9]*\([0-9][0-9]*\).*/\1/p' "$HUD_SETTINGS" 2>/dev/null | head -n1)"
+	[ -n "$pct" ] || return 0
+	max="$(cat "$BL/max_brightness" 2>/dev/null)" || return 0
+	level=$((max * pct / 100))
+	[ "$level" -ge 1 ] || level=1
+	echo "$level" > "$BL/brightness" 2>/dev/null || true
+}
 
 depend() {
 	after modules mdev hwdrivers
@@ -41,10 +57,11 @@ start() {
 		return 0
 	fi
 
-	# Backlight off until the splash is up, so the panel is dark (not backlit-black) during the
-	# broker+splash bring-up; turned back on after the splash paints. The sysfs node exists only once
-	# the panel/backlight driver has bound (which card0 above implies).
-	echo 1 > /sys/class/backlight/backlight/bl_power 2>/dev/null
+	# The kernel never touches the backlight (the panel driver does not attach it), so it is
+	# still in its probe-time OFF state here. The explicit off is belt-and-braces for restarts,
+	# where a previous run already lit it. The sysfs node exists only once the panel/backlight
+	# driver has bound (which card0 above implies).
+	echo 1 > "$BL/bl_power" 2>/dev/null
 
 	if [ -x "$BROKER" ]; then
 		start-stop-daemon --start --background --make-pidfile \
@@ -67,8 +84,10 @@ start() {
 		fi
 	fi
 
-	# Backlight on now that the splash is up (paired with the off above).
-	echo 0 > /sys/class/backlight/backlight/bl_power 2>/dev/null
+	# First light: splash is committed, set the user's brightness, then enable. Order matters -
+	# brightness before bl_power, so the panel never shows the driver-default level.
+	apply_saved_brightness
+	echo 0 > "$BL/bl_power" 2>/dev/null
 
 	eend 0
 }
