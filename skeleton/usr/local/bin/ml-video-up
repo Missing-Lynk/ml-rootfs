@@ -45,5 +45,6 @@ fi
 #   touch /usrdata/missinglynk/latstats
 # and removes the file when done.
 [ -f /usrdata/missinglynk/latstats ] && export ML_LATSTATS=1
+[ -f /usrdata/missinglynk/latraw ] && export ML_LATRAW=1
 
 exec env ML_HEAP="${ML_HEAP:-default_cma_region}" ML_COMPOSE=1 ML_COMP_MAX="${ML_COMP_MAX:-10}" ml-pipeline "${1:-rf}"
