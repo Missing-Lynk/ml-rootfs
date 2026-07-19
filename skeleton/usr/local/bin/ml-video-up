@@ -40,4 +40,10 @@ fi
 # DMA (and on the mmz heap it would share with the wave5 decoders and the DVR encoder), so an
 # uncapped greedy grab starves them. 10 x ~3.1 MiB leaves headroom and stays above the 5-buffer
 # floor for smooth 60 fps. Override with ML_COMP_MAX to retune.
+# Latency-trace toggle (plans/video-latency-and-load.md): the flag file survives reboots and
+# OpenRC's env scrubbing, so a bench session enables the 1 Hz lat lines with
+#   touch /usrdata/missinglynk/latstats
+# and removes the file when done.
+[ -f /usrdata/missinglynk/latstats ] && export ML_LATSTATS=1
+
 exec env ML_HEAP="${ML_HEAP:-default_cma_region}" ML_COMPOSE=1 ML_COMP_MAX="${ML_COMP_MAX:-10}" ml-pipeline "${1:-rf}"

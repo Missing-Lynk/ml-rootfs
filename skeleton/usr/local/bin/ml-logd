@@ -82,6 +82,56 @@ trap cleanup TERM INT
 start_kmsg
 echo "uptime_s,mem_free_kb,mem_avail_kb,cma_free_kb,cma_total_kb,load1" > "$STATS"
 
+# Per-thread CPU sampling for the video stack. One row per thread per tick with the thread's
+# CUMULATIVE utime+stime jiffies and its instantaneous state; the host-side report script does
+# the deltas and percentages. A "_cpu" row carries the machine-wide busy/total jiffies from
+# /proc/stat for normalisation. All reads are shell builtins on /proc, no forks.
+THREADS="$SDIR/threads.csv"
+echo "uptime_s,proc,tid,tname,state,jiffies" > "$THREADS"
+ENVDONE=""
+
+sample_threads() {
+	tup="$1"
+	# Machine-wide jiffies: user nice system idle iowait irq softirq steal.
+	read _ cu cn cs ci cw cq cx cst _ < /proc/stat
+	echo "$tup,_cpu,0,total,-,$((cu + cn + cs + ci + cw + cq + cx + cst))" >> "$THREADS"
+	echo "$tup,_cpu,0,busy,-,$((cu + cn + cs + cq + cx + cst))" >> "$THREADS"
+
+	for cmf in /proc/[0-9]*/comm; do
+		read -r pcomm < "$cmf" 2>/dev/null || continue
+		case "$pcomm" in
+			ml-pipeline|ml-hud|ml-linkd) ;;
+			*) continue ;;
+		esac
+
+		pdir="${cmf%/comm}"
+		for tst in "$pdir"/task/*/stat; do
+			[ -f "$tst" ] || continue
+			read -r line < "$tst" 2>/dev/null || continue
+			tid="${tst%/stat}"
+			tid="${tid##*/}"
+			read -r tname < "${tst%/stat}/comm" 2>/dev/null || tname="?"
+			# comm may contain spaces: fields resume after the closing paren.
+			rest="${line##*) }"
+			set -- $rest
+			# rest: state ppid pgrp sess tty tpgid flags minflt cminflt majflt cmajflt utime stime
+			state="$1"
+			ut="${12:-0}"
+			st="${13:-0}"
+			echo "$tup,$pcomm,$tid,$tname,$state,$((ut + st))" >> "$THREADS"
+		done
+
+		# One-shot: stamp the process' ML_* config into env.txt (measurement attribution).
+		if [ -z "$ENVDONE" ] && [ "$pcomm" = "ml-pipeline" ]; then
+			ENVDONE=1
+			{
+				echo "--- ml-pipeline ML_* env ---"
+				tr '\0' '\n' < "$pdir/environ" 2>/dev/null | grep '^ML_'
+			} >> "$SDIR/env.txt" 2>/dev/null
+		fi
+	done
+}
+
 while : ; do
 	# uptime (first field of /proc/uptime).
 	read up _ < /proc/uptime
@@ -100,6 +150,8 @@ while : ; do
 	read l1 _ < /proc/loadavg
 
 	echo "$up,$mf,$ma,$cf,$ct,$l1" >> "$STATS"
+
+	sample_threads "$up"
 
 	mirror_logs
 
