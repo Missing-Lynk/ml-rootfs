@@ -3,9 +3,11 @@
 # Proxima-class devices (goggles, air units, video receivers). Output is a UBIFS+UBI image
 # to flash to the device's NAND partition.
 #
-# Per-board specifics live in a device profile (devices/*.conf).
+# Per-device specifics live in devices/<name>/: board.conf (identity/addressing + NAND geometry)
+# and overlay/ (the device-specific OpenRC services + modules-load, layered on the shared
+# skeleton/). Arg 1 = the device name; default = the goggle.
 #
-#   build.sh [devices/PROFILE.conf]   # default: devices/artosyn-proxima-9311.conf
+#   build.sh [<device-name>]          # default: betafpv-vr04-goggle
 #
 # No root required: the rootfs is built under `fakeroot` (so files are recorded root:root),
 # apk-tools-static is run from a local sha-verified extract, and the image is generated
@@ -104,14 +106,16 @@ HOST_ARCH="$(uname -m)"
 APK_STATIC_PKG="apk-tools-static-${APK_TOOLS_VER}.apk"
 APK_STATIC_URL="$MAIN_REPO/$HOST_ARCH/$APK_STATIC_PKG"
 
-# The device profile (target identity/addressing + NAND geometry) is per-board, so it
-# lives in its own file. Default to the bundled profile; override: build.sh PROFILE.conf
-DEVICE_CONF="${1:-$HERE/devices/artosyn-proxima-9311.conf}"
-
-# Accept a profile path relative to the script dir (e.g. `devices/foo.conf`) from any CWD.
-[ -f "$DEVICE_CONF" ] || DEVICE_CONF="$HERE/${1:-}"
-[ -f "$DEVICE_CONF" ] || die "device config not found: ${1:-$DEVICE_CONF}"
-log "device profile: $DEVICE_CONF"
+# Everything per-device lives in devices/<name>/: board.conf (target identity/addressing + NAND
+# geometry) and overlay/ (the device-specific OpenRC services + modules-load, layered on the
+# shared skeleton/ below). Arg 1 = the device name; default = the goggle. Same names as the root
+# Makefile DEVICE and kernel/devices/<name>/. See plans/device-hal.md.
+DEV="${1:-betafpv-vr04-goggle}"
+DEVICE_DIR="$HERE/devices/$DEV"
+DEVICE_CONF="$DEVICE_DIR/board.conf"
+DEVICE_OVERLAY="$DEVICE_DIR/overlay"
+[ -f "$DEVICE_CONF" ] || die "device '$DEV': no $DEVICE_CONF (devices/$DEV/board.conf)"
+log "device: $DEV ($DEVICE_CONF)"
 
 # shellcheck source=/dev/null
 . "$DEVICE_CONF"
@@ -202,14 +206,18 @@ tar -xzf "$DL/$MINIROOTFS" -C "$WORK" ./etc/apk/keys 2>/dev/null
 cp "$WORK/etc/apk/keys/"*.rsa.pub "$KEYS/"
 
 # ======================================================================================
-# Stage the overlay: copy the static config tree from skeleton/ (edit those files
-# directly), then add the files that depend on the device/build vars and template the
-# gadget service's addressing.
+# Stage the overlay: the shared base tree from skeleton/, then the device overlay from
+# devices/$DEV/overlay/ layered on top (device-specific OpenRC services + modules-load;
+# it may add files or override a base file). Then the files that depend on the device/build
+# vars, templating the gadget service's addressing. Edit skeleton/ and the device overlay
+# directly. make-rootfs.sh enables each ml-* service only if present, so a device that omits
+# one (e.g. no ml-display) simply never enables it - no other change needed.
 # ======================================================================================
 STAGE="$WORK/overlay"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 cp -a "$SKEL/." "$STAGE/"
+[ -d "$DEVICE_OVERLAY" ] && cp -a "$DEVICE_OVERLAY/." "$STAGE/"
 mkdir -p "$STAGE/etc/apk"
 
 # The proprietary vendor blobs the open stack needs live under firmware/bin/slot-a/
@@ -259,7 +267,7 @@ else
   log "RF firmware: $RF_FW / $RF_CFG absent; RF bring-up will push them at runtime (glue/dev/rf-bringup.sh -> /run/ml/fw)"
 fi
 
-# Display bring-up (the ml-display boot service, skeleton/etc/init.d/ml-display): the
+# Display bring-up (the ml-display boot service, in the goggle device overlay): the
 # static ml-drmfd DRM-master broker + ml-splash (both built by userspace/gstreamer/src/build.sh)
 # and the splash asset (userspace/assets/splash/splash.yuv). Binaries staged if present; the
 # service warns and skips at boot otherwise.

@@ -17,12 +17,12 @@ On boot an OpenRC service (`/etc/init.d/usb-gadget`, in the `boot` runlevel) bri
 Run on the host (needs internet, `fakeroot`, `openssl`, `qemu-aarch64-static` from `qemu-user-static`, and `mkfs.ubifs`/`ubinize` from `mtd-utils`). The whole build runs as plain host processes, no container and no root. The only downloads are the pinned, sha256-verified Alpine build inputs (`apk.static` and the signing keys), cached under the gitignored `build/dl/`:
 
 ```sh
-build.sh                       # dev flavor (default), default device profile
+build.sh                       # dev flavor (default), default device (betafpv-vr04-goggle)
 FLAVOR=slim build.sh           # lean production image
-build.sh devices/myboard.conf  # or for another board (still FLAVOR-aware)
+build.sh <device-name>         # or for another device (still FLAVOR-aware)
 ```
 
-The flavor is chosen with the `FLAVOR` env var (`dev` default, or `slim`); the positional arg stays the device profile. `dev` is the full bring-up platform (scp/sftp, util-linux, strace/tcpdump/htop); `slim` strips those to a 5-package busybox base for a smaller image. Both record their identity in `/etc/ml-flavor`. It prints the flavor, the final `rootfs.ubi` size, and the installed package list. All regenerable output (the images, the scratch `work/` tree, and the cached, verified downloads in `dl/`) lands under the gitignored `build/`; re-running rebuilds from those cached downloads.
+The flavor is chosen with the `FLAVOR` env var (`dev` default, or `slim`); the positional arg is the device name, resolving `devices/<name>/board.conf` + `devices/<name>/overlay/`. `dev` is the full bring-up platform (scp/sftp, util-linux, strace/tcpdump/htop); `slim` strips those to a 5-package busybox base for a smaller image. Both record their identity in `/etc/ml-flavor`. It prints the flavor, the final `rootfs.ubi` size, and the installed package list. All regenerable output (the images, the scratch `work/` tree, and the cached, verified downloads in `dl/`) lands under the gitignored `build/`; re-running rebuilds from those cached downloads.
 
 The static config files dropped into the image live as an editable tree under `skeleton/` (copied verbatim into the rootfs); the gadget service `skeleton/etc/init.d/usb-gadget` carries `@...@` placeholders that `build.sh` fills in from the device profile. Only the handful of files that depend on build variables (`/etc/hostname`, `/etc/hosts`, `/etc/apk/repositories`) are still generated in `build.sh`. The fakeroot build body is `scripts/make-rootfs.sh`.
 
@@ -47,7 +47,7 @@ The RF video pipeline is the production (rootfs) track: `build.sh` stages the st
 
 ### Device profiles
 
-Everything that is per-board (target hostname/password, the USB ECM addressing and MACs, and the NAND/UBI geometry + target partition) lives in a device profile under `devices/`. `build.sh` sources one: the first argument, or `devices/artosyn-proxima-9311.conf` by default. To target another board, copy that file, adjust the values, and pass its path. The build fails early if a profile is missing any required variable.
+Everything per-device lives in `devices/<name>/`: `board.conf` (target hostname/password, the USB ECM addressing and MACs, and the NAND/UBI geometry + target partition) and `overlay/` (the device-specific OpenRC services + `modules-load.d`, layered on the shared `skeleton/`). `build.sh` takes the device name (first argument, default `betafpv-vr04-goggle`) and resolves both. To add a device, create `devices/<name>/board.conf` (+ `overlay/` for any device-specific services) and pass `<name>`. The build fails early if `board.conf` is missing a required variable. Service enablement (`scripts/make-rootfs.sh`) is file-presence-gated, so a device whose overlay omits a service (e.g. no `ml-display`) simply never enables it.
 
 ## Flash
 
@@ -74,4 +74,4 @@ ubi.mtd=userapp1 root=ubi:rootfs rootfstype=ubifs rw
 
 ## NAND / UBI geometry (from the live kernel, set per board in the device profile)
 
-For the goggle (`devices/artosyn-proxima-9311.conf`): PEB 131072 (128 KiB), min I/O 2048, sub-page 2048, VID header offset 2048, data offset 4096, UBIFS LEB 126976, `userapp1` = 360 PEBs (45 MiB). The UBIFS image is built with `mkfs.ubifs -m 2048 -e 126976 -c 350 -x none` (no compression, to avoid any kernel decompressor dependency for the first cut) and wrapped with `ubinize -m 2048 -p 131072 -s 2048`.
+For the goggle (`devices/betafpv-vr04-goggle/board.conf`): PEB 131072 (128 KiB), min I/O 2048, sub-page 2048, VID header offset 2048, data offset 4096, UBIFS LEB 126976, `userapp1` = 360 PEBs (45 MiB). The UBIFS image is built with `mkfs.ubifs -m 2048 -e 126976 -c 350 -x none` (no compression, to avoid any kernel decompressor dependency for the first cut) and wrapped with `ubinize -m 2048 -p 131072 -s 2048`.
