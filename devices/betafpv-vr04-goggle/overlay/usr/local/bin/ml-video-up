@@ -46,5 +46,10 @@ fi
 # and removes the file when done.
 [ -f /usrdata/missinglynk/latstats ] && export ML_LATSTATS=1
 [ -f /usrdata/missinglynk/latraw ] && export ML_LATRAW=1
+# pace: file contents = seed rate in Hz for the phase servo (empty file = start from boot rate)
+if [ -f /usrdata/missinglynk/pace ]; then
+    seed=$(cat /usrdata/missinglynk/pace)
+    export ML_PACE="${seed:-1}" ML_PACE_DBG=1
+fi
 
 exec env ML_HEAP="${ML_HEAP:-default_cma_region}" ML_COMPOSE=1 ML_COMP_MAX="${ML_COMP_MAX:-10}" ml-pipeline "${1:-rf}"
