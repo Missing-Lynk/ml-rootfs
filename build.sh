@@ -348,6 +348,19 @@ else
   die "video: $RF_BRINGUP_BIN absent - RF bring-up is essential; build it with 'make -C userspace rf-bringup'"
 fi
 
+# ml-rf-persist (native/build.sh): writes a newly-paired air-unit MAC into the config candidate list
+# under /usrdata so a bind survives reboot. ml-linkd execs it on a successful persist-mode bind;
+# absent, binding still works but only as a runtime lock (a power cycle drops it). Static aarch64.
+RF_PERSIST_BIN="$HERE/../native/build/ml-rf-persist"
+if [ -f "$RF_PERSIST_BIN" ]; then
+  mkdir -p "$STAGE/usr/local/bin"
+  install -m 0755 "$RF_PERSIST_BIN" "$STAGE/usr/local/bin/ml-rf-persist"
+  "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/ml-rf-persist" 2>/dev/null || true
+  log "video: staged ml-rf-persist -> /usr/local/bin/ (persist a paired air-unit MAC across reboot)"
+else
+  log "video: $RF_PERSIST_BIN absent (build with native/build.sh); binding will be runtime-only"
+fi
+
 # Slot-switch helpers for the HUD's "Switch to Slot A" action: mtdtool (flips the gpt0 active bit;
 # native/build.sh) and wdt-reset (watchdog reset so the SPL boots the active slot; built from
 # glue/boot/wdt-reset.c). Both aarch64 static. Skipped if absent.

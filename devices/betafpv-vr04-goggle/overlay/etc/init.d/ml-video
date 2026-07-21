@@ -40,7 +40,11 @@ rf_up() {
 
 	cfg=$(rf_cfg)
 	einfo "ml-video: RF band config $cfg"
-	"$RF_BRINGUP" "$RF_FW" "$cfg"
+	# Prefer a per-device config edited by binding (ml-rf-persist writes the paired air-unit MAC
+	# into candidate.slot under /usrdata). ml-rf-bringup writes ML_RF_FW_PATH to the kernel firmware
+	# search path, tried before /lib/firmware: the edited cfg wins when present, else the baked cfg
+	# (and always the baked bb_demo_gnd_d.img, which is never copied) is used.
+	ML_RF_FW_PATH=/usrdata/missinglynk "$RF_BRINGUP" "$RF_FW" "$cfg"
 }
 
 start() {
