@@ -46,6 +46,8 @@ fi
 # and removes the file when done.
 [ -f /usrdata/missinglynk/latstats ] && export ML_LATSTATS=1
 [ -f /usrdata/missinglynk/latraw ] && export ML_LATRAW=1
+# dvr-h264: record DVR in H.264 instead of the default H.265 (mlp-record.c ML_DVR_CODEC)
+[ -f /usrdata/missinglynk/dvr-h264 ] && export ML_DVR_CODEC=h264
 # pace: file contents = seed rate in Hz for the phase servo (empty file = start from boot rate)
 if [ -f /usrdata/missinglynk/pace ]; then
     seed=$(cat /usrdata/missinglynk/pace)
