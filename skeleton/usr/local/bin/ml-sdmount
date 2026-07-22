@@ -1,0 +1,87 @@
+#!/bin/sh
+# Reconcile the microSD state at /mnt/sdcard. Called by the ml-sdcard service at boot and by the mdev
+# hotplug rule on every mmcblk add/remove event. /mnt/sdcard is ALWAYS a mount: the SD card when one is
+# inserted, otherwise a read-only tmpfs holding a single No_SD_Card.txt marker. Keeping it always
+# mounted means a card-less DVR write lands on a read-only filesystem (never the rootfs) and the MTP
+# gadget always exposes a valid, unwritable "no card" storage instead of the bare rootfs directory.
+# Idempotent, so re-runs and the several events a single card fires are harmless.
+
+MNT=/mnt/sdcard
+LOCK=/run/ml-sdmount.lock
+
+# Run the reconcile detached and flock-serialised, then return at once. No caller ever blocks on a
+# (possibly slow) card mount: the boot services, the mdev -s coldplug, and the hotplug daemon all
+# continue immediately while the mount/unmount completes in the background - the card then appears in
+# the HUD within its ~1s telemetry poll. The lock is held for the whole reconcile, so the several events
+# a card swap fires (disk + each partition) cannot race into two stacked placeholder mounts. ACTION
+# (set by mdev) is inherited by the detached worker.
+if [ "${ML_SDMOUNT_LOCKED:-}" != 1 ]; then
+	export ML_SDMOUNT_LOCKED=1
+	setsid flock "$LOCK" "$0" "$@" >/dev/null 2>&1 &
+	exit 0
+fi
+
+# The source mounted at $MNT (last match wins, i.e. the top of any stack), or empty if nothing is.
+mounted_source() {
+	awk -v mountpoint="$MNT" '$2 == mountpoint { source = $1 } END { print source }' /proc/mounts
+}
+
+# Mount the read-only placeholder: a tmpfs carrying just the No_SD_Card.txt marker. Mounted read-write
+# to write the marker, then remounted read-only so neither the MTP host nor a stray DVR write can put
+# anything on it.
+mount_placeholder() {
+	mkdir -p "$MNT"
+	mount -t tmpfs -o size=64k tmpfs "$MNT" || return 1
+	printf 'No SD card inserted.\nInsert a microSD card to record and store video.\n' > "$MNT/No_SD_Card.txt"
+	mount -o remount,ro "$MNT"
+}
+
+# The card enumerates as mmcblk0 or mmcblk1 (index depends on probe order). Prefer its first partition,
+# else the whole device (cards are sometimes formatted without a partition table).
+card_device() {
+	local base
+	for base in /dev/mmcblk0 /dev/mmcblk1; do
+		if [ -b "${base}p1" ]; then
+			echo "${base}p1"
+			return
+		elif [ -b "$base" ]; then
+			echo "$base"
+			return
+		fi
+	done
+}
+
+card="$(card_device)"
+
+# A remove event means the card is on its way out even while its node still lingers.
+[ "$ACTION" = "remove" ] && card=
+
+if [ -n "$card" ]; then
+	# A card is present: make sure the card, not the placeholder, is what is mounted.
+	case "$(mounted_source)" in
+		/dev/mmcblk*)
+			exit 0 ;;                       # the card is already mounted
+	esac
+
+	umount -l "$MNT" 2>/dev/null            # drop the placeholder, if any
+	mkdir -p "$MNT"
+
+	# No -t: busybox mount probes /proc/filesystems (exfat/vfat).
+	if mount "$card" "$MNT" 2>/dev/null; then
+		exit 0
+	fi
+
+	# The card is present but unmountable (unsupported filesystem): fall through to the placeholder so
+	# /mnt/sdcard is never left as the bare rootfs directory.
+fi
+
+# No usable card: make sure the read-only placeholder is what is mounted.
+case "$(mounted_source)" in
+	tmpfs)
+		exit 0 ;;                            # the placeholder is already up
+	/dev/mmcblk*)
+		umount -l "$MNT" 2>/dev/null ;;      # a card was pulled: drop it, then place the marker
+esac
+
+mount_placeholder
+exit 0

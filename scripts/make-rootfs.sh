@@ -68,6 +68,13 @@ for svc in mdev hwdrivers modules; do
   [ -e "$ROOT/etc/init.d/$svc" ] && ln -sf "/etc/init.d/$svc" "$ROOT/etc/runlevels/boot/$svc"
 done
 
+# Runtime hotplug: the mainline kernel has no CONFIG_UEVENT_HELPER, so the mdev service's
+# /proc/sys/kernel/hotplug helper never fires. ml-hotplugd runs `mdev -d` (netlink daemon) so post-boot
+# device events (notably SD-card insert/remove -> the mmcblk mdev rule -> ml-sdmount) are handled.
+if [ -e "$ROOT/etc/init.d/ml-hotplugd" ]; then
+  ln -sf /etc/init.d/ml-hotplugd "$ROOT/etc/runlevels/boot/ml-hotplugd"
+fi
+
 # /usrdata (the usr_data UBI volume), in the boot runlevel ahead of every ml-* service: it is the
 # only persistent store, so the HUD's settings and the RF band marker are unreadable without it.
 # The kernel attaches only the rootfs UBI from the bootargs, so this service attaches usr_data too.
@@ -99,6 +106,15 @@ fi
 # SD card mount at /mnt/sdcard, ordered after coldplug and before ml-hud.
 if [ -e "$ROOT/etc/init.d/ml-sdcard" ]; then
   ln -sf /etc/init.d/ml-sdcard "$ROOT/etc/runlevels/default/ml-sdcard"
+fi
+
+# Automount the microSD card on insert/remove. The SD controller has a native card-detect line, so the
+# kernel fires mmcblk hotplug uevents; the stock mdev.conf only runs persistent-storage on them (no
+# mount). busybox mdev uses the first matching rule, so an mmcblk hook is inserted ahead of the stock
+# rule; ml-sdmount (the * prefix runs it on both add and remove) reconciles /mnt/sdcard each event.
+if [ -e "$ROOT/etc/mdev.conf" ] && ! grep -q ml-sdmount "$ROOT/etc/mdev.conf"; then
+  grep -q '^mmcblk\.\*' "$ROOT/etc/mdev.conf" || { echo "make-rootfs: mdev.conf mmcblk rule not found" >&2; exit 1; }
+  sed -i '/^mmcblk\.\*/i mmcblk[0-9].* root:disk 0660 */usr/local/bin/ml-sdmount' "$ROOT/etc/mdev.conf"
 fi
 
 # HUD autostart, ordered after ml-display (DRM broker + modeset).

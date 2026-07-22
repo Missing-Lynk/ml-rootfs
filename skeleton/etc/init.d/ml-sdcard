@@ -1,52 +1,23 @@
 #!/sbin/openrc-run
-# Mount the microSD card at /mnt/sdcard. Ordered after the coldplug (dw_mci-artosyn has bound
-# /dev/mmcblk0) and before ml-hud (so the OSD free-space field is populated). Boot-time only;
-# best-effort - no card or a failed mount leaves /mnt/sdcard empty and never blocks boot.
+# Mount the microSD card at /mnt/sdcard at boot. Ordered after the coldplug (dw_mci-artosyn has bound
+# /dev/mmcblk*) and before ml-hud (so the OSD free-space field is populated). Post-boot insert and
+# removal are handled by the ml-sdmount mdev hotplug hook, which shares the same mount logic. Boot-time
+# only here; best-effort - no card or a failed mount leaves /mnt/sdcard empty and never blocks boot.
 description="Mount the microSD card at /mnt/sdcard"
-
-MNT=/mnt/sdcard
 
 depend() {
 	after modules mdev hwdrivers
 	before ml-hud
 }
 
-# The card enumerates as mmcblk0 or mmcblk1 (index depends on probe order). Prefer its first
-# partition, else the whole device (cards are sometimes formatted without a partition table).
-sd_device() {
-	local base
-	for base in /dev/mmcblk0 /dev/mmcblk1; do
-		if [ -b "${base}p1" ]; then
-			echo "${base}p1"
-			return
-		elif [ -b "$base" ]; then
-			echo "$base"
-			return
-		fi
-	done
-}
-
 start() {
 	ebegin "Mounting SD card"
-
-	local dev
-	dev="$(sd_device)"
-	if [ -z "$dev" ]; then
-		eend 0 "no SD card present"
-		return 0
-	fi
-
-	mkdir -p "$MNT"
-	# No -t: busybox mount probes /proc/filesystems (exfat/vfat).
-	if mount "$dev" "$MNT" 2>/dev/null; then
-		eend 0
-	else
-		eend 0 "$dev present but mount failed (unsupported filesystem?)"
-	fi
+	/usr/local/bin/ml-sdmount
+	eend 0
 }
 
 stop() {
 	ebegin "Unmounting SD card"
-	umount "$MNT" 2>/dev/null
+	umount -l /mnt/sdcard 2>/dev/null
 	eend 0
 }

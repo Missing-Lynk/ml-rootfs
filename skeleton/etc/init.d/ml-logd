@@ -21,8 +21,10 @@ start() {
 		eend 0
 		return 0
 	fi
-	if ! mountpoint -q /mnt/sdcard; then
-		ewarn "ml-logd: /mnt/sdcard not mounted (no SD card?); skipping"
+	# /mnt/sdcard is always mounted (a read-only tmpfs placeholder when no card is in), so require a
+	# real card: a /dev/mmcblk* block device mounted there, not the placeholder.
+	if ! grep -q '^/dev/mmcblk[^ ]* /mnt/sdcard ' /proc/mounts; then
+		ewarn "ml-logd: no SD card mounted at /mnt/sdcard; skipping"
 		eend 0
 		return 0
 	fi

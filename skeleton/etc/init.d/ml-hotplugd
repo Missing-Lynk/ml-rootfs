@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+# busybox mdev in netlink-daemon mode: applies /etc/mdev.conf to runtime hotplug uevents. The mainline
+# kernel is built without CONFIG_UEVENT_HELPER, so the /proc/sys/kernel/hotplug helper the mdev service
+# echoes is inert and post-boot insert/remove events would otherwise be missed (mdev -s coldplug still
+# populates the boot-time state). The daemon listens on the kernel netlink socket instead, which needs
+# no helper. Required for SD-card hot-swap: the mmcblk rule runs ml-sdmount on each add/remove.
+description="mdev netlink hotplug daemon (runtime device events -> /etc/mdev.conf)"
+
+command="/sbin/mdev"
+
+# -d: netlink daemon; -f: stay in foreground so OpenRC supervises it
+command_args="-df"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+	need dev
+	after mdev
+}

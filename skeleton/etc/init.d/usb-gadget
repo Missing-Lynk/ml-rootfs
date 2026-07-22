@@ -46,10 +46,13 @@ setup_mtp() {
 	[ -f "$UMTPRD_CONF" ] || { einfo "MTP: $UMTPRD_CONF missing; ECM-only"; return 1; }
 	[ -e "$MTP_DISABLE" ] && { einfo "MTP: disabled ($MTP_DISABLE present); ECM-only"; return 1; }
 
-	# Storage root must exist even with no SD card. ml-sdcard mkdir's it too, but usb-gadget may
-	# run first; an empty dir is a valid (empty) MTP storage - the file list appears once a card
-	# mounts on top. (Graceful no-SD handling.)
+	# The storage root must be a real mount before the host browses it, never the bare rootfs directory.
+	# ml-sdmount mounts the card if one is present, otherwise a read-only no-card placeholder. It detaches
+	# its own mount work and returns at once, so this service (which provides the network / SSH) never
+	# blocks on a slow card mount. The mount point is created synchronously so umtprd always has a valid
+	# path; ml-sdmount (and ml-sdcard) fill it in, and umtprd reads the storage live per browse.
 	mkdir -p "$MTP_STORAGE" 2>/dev/null || true
+	/usr/local/bin/ml-sdmount >/dev/null 2>&1
 
 	mkdir -p "$G/functions/ffs.mtp" || { ewarn "MTP: cannot create ffs.mtp function"; return 1; }
 
