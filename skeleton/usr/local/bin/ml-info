@@ -6,6 +6,15 @@ flavor="$(cat /etc/ml-flavor 2>/dev/null || echo '?')"
 host="$(hostname 2>/dev/null || echo '?')"
 kver="$(uname -r)"
 
+# Open firmware version + build time from the baked image identity (os-release-style).
+ver="?"
+built="?"
+if [ -r /etc/ml-release ]; then
+	. /etc/ml-release
+	ver="${ML_VERSION:-?}"
+	built="${ML_BUILD_TIME:-?}"
+fi
+
 # Which partition/volume booted, straight from the kernel cmdline.
 boot=""
 for tok in $(cat /proc/cmdline 2>/dev/null); do
@@ -23,6 +32,7 @@ ips="$(ip -o -4 addr show 2>/dev/null | awk '$2!="lo"{printf "%s=%s ", $2, $4}')
 ko_count="$(find /lib/modules -name '*.ko' 2>/dev/null | wc -l | tr -d ' ')"
 
 printf '  %s  (flavor=%s)\n' "$host" "$flavor"
+printf '  version: %s   built: %s\n' "$ver" "$built"
 printf '  kernel : %s   modules: %s .ko\n' "$kver" "$ko_count"
 printf '  net    : %s\n' "$ips"
 printf '  boot   :%s\n' "$boot"

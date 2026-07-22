@@ -50,6 +50,22 @@ sed -i "s|^root:[^:]*:|root:${ROOT_HASH//|/\\|}:|" "$ROOT/etc/shadow"
 # can report which image is running.
 echo "${FLAVOR:-dev}" > "$ROOT/etc/ml-flavor"
 
+# Record the image identity in an os-release-style /etc/ml-release: the open firmware
+# version (mirrors the mlimg bundle label), the kernel version, the rootfs/kernel
+# git-describes, the build time, flavor, and target device. Read-only like the rest of the
+# rootfs; answers "what image is this" from inside the slot (ml-info, the CLI, the boot
+# service that self-heals the per-unit device record).
+cat > "$ROOT/etc/ml-release" <<EOF
+ML_NAME="MissingLynk open firmware"
+ML_VERSION="${ML_VERSION:-dev}"
+ML_FLAVOR="${FLAVOR:-dev}"
+ML_DEVICE="${DEV:-}"
+ML_KERNEL_VERSION="${ML_KERNEL_VERSION:-}"
+ML_KERNEL_GIT="${ML_KERNEL_GIT:-}"
+ML_ROOTFS_GIT="${ML_ROOTFS_GIT:-}"
+ML_BUILD_TIME="${ML_BUILD_TIME:-}"
+EOF
+
 # Enable services: gadget (provides net) in boot, dropbear + best-effort NTP in default.
 # The device has a battery-backed RTC, so the openrc `hwclock` service (boot runlevel)
 # loads it into the system clock at boot and writes it back at shutdown; ntp-oneshot then
@@ -130,6 +146,12 @@ fi
 # RF video autostart: AR8030 bring-up + ml-linkd + ml-pipeline, ordered after ml-display.
 if [ -e "$ROOT/etc/init.d/ml-video" ]; then
   ln -sf /etc/init.d/ml-video "$ROOT/etc/runlevels/default/ml-video"
+fi
+
+# Boot-count recorder, ordered after the usable-unit services (its depend()); marks a healthy boot
+# in the per-unit device record. Best-effort; skips cleanly if /usrdata or the binary is absent.
+if [ -e "$ROOT/etc/init.d/ml-boot-record" ]; then
+  ln -sf /etc/init.d/ml-boot-record "$ROOT/etc/runlevels/default/ml-boot-record"
 fi
 
 # OpenRC silently skips a non-executable init script (a stripped exec bit -> the service

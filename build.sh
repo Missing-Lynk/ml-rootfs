@@ -361,6 +361,19 @@ else
   log "video: $RF_PERSIST_BIN absent (build with native/build.sh); binding will be runtime-only"
 fi
 
+# ml-boot-record (native/build.sh): marks a healthy boot in /usrdata/missinglynk/device.json
+# (increments boots, records the /etc/ml-release version). Run once late by the ml-boot-record
+# service; absent, the per-unit boot count simply is not maintained. Static aarch64.
+BOOT_RECORD_BIN="$HERE/../native/build/ml-boot-record"
+if [ -f "$BOOT_RECORD_BIN" ]; then
+  mkdir -p "$STAGE/usr/local/bin"
+  install -m 0755 "$BOOT_RECORD_BIN" "$STAGE/usr/local/bin/ml-boot-record"
+  "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/ml-boot-record" 2>/dev/null || true
+  log "identity: staged ml-boot-record -> /usr/local/bin/ (mark a healthy boot in device.json)"
+else
+  log "identity: $BOOT_RECORD_BIN absent (build with native/build.sh); boot count not maintained"
+fi
+
 # minidhcpd (native/build.sh, the musl-static build): single-lease DHCP on the USB gadget link so
 # a phone/PC running a DHCP client gets an address on the gadget /24 (the Android app finds the
 # device by that subnet). Started by the usb-gadget service; absent, static-IP hosts still work.
@@ -467,10 +480,22 @@ vol_name=rootfs
 vol_flags=autoresize
 EOF
 
+# Image identity, baked into /etc/ml-release (make-rootfs.sh) so on-device tooling and the
+# CLI can answer "what image is this" from inside the slot. ML_VERSION mirrors the mlimg
+# manifest label (glue/flash/mlimg.py): the kernel git-describe, falling back to the pinned
+# kernel version, then "dev". The git-describes and build time are the same provenance mlimg
+# records, so a running rootfs can be matched to the bundle it came from.
+ML_KERNEL_VERSION="${KERNEL_VERSION:-}"
+ML_KERNEL_GIT="$(git -C "$HERE/../kernel" describe --tags --always --dirty 2>/dev/null || true)"
+ML_ROOTFS_GIT="$(git -C "$HERE" describe --tags --always --dirty 2>/dev/null || true)"
+ML_VERSION="${ML_KERNEL_GIT:-${ML_KERNEL_VERSION:-dev}}"
+ML_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 log "building rootfs under fakeroot (flavor=$FLAVOR: $PACKAGES)"
 export APK_STATIC KEYS ROOT MAIN_REPO COMMUNITY_REPO PACKAGES STAGE \
        ROOT_HASH MKFS_UBIFS UBINIZE UBIFS_IMG UBI_IMG UBINIZE_CFG \
-       MIN_IO LEB_SIZE MAX_LEB_COUNT PEB_SIZE SUBPAGE MODULES_STAGE FLAVOR
+       MIN_IO LEB_SIZE MAX_LEB_COUNT PEB_SIZE SUBPAGE MODULES_STAGE FLAVOR \
+       DEV ML_VERSION ML_KERNEL_VERSION ML_KERNEL_GIT ML_ROOTFS_GIT ML_BUILD_TIME
 
 fakeroot bash -euo pipefail "$SCRIPTS/make-rootfs.sh"
 

@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+description="Mark a healthy boot in the per-unit device record (/usrdata/missinglynk/device.json)"
+
+BOOT_RECORD=/usr/local/bin/ml-boot-record
+
+# Ordered after the services that make the unit usable (SSH, RF video, HUD) and after the usrdata
+# mount, so reaching this point means the slot came up healthy and device.json is writable.
+depend() {
+	after ml-usrdata dropbear ml-video ml-hud
+}
+
+start() {
+	ebegin "Recording a healthy boot"
+	if [ ! -x "$BOOT_RECORD" ]; then
+		ewarn "ml-boot-record: $BOOT_RECORD missing; skipping"; eend 0; return 0
+	fi
+
+	"$BOOT_RECORD"
+	# Best-effort: an unwritable /usrdata (no persistent volume) must not fail the boot.
+	eend 0
+}
