@@ -198,11 +198,19 @@ start() {
 	# Host acts as gateway/NAT for internet + apk.
 	ip route replace default via "$HOST_GW" dev "$iface" 2>/dev/null || true
 
+	# Single-lease DHCP so a tethered phone/PC running a DHCP client gets an address on the
+	# gadget /24 (server + offer derived from the interface address). Best-effort: a host
+	# with a static IP never depends on it.
+	if [ -x /usr/local/bin/minidhcpd ]; then
+		start-stop-daemon --start --background --exec /usr/local/bin/minidhcpd -- "$iface" || true
+	fi
+
 	eend 0
 }
 
 stop() {
 	ebegin "Tearing down USB composite gadget"
+	start-stop-daemon --stop --exec /usr/local/bin/minidhcpd 2>/dev/null || true
 	# Unbind the UDC first so no function is live, then unwind MTP, then ECM.
 	[ -e "$G/UDC" ] && echo "" > "$G/UDC" 2>/dev/null || true
 	teardown_mtp

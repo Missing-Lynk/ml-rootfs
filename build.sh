@@ -361,6 +361,18 @@ else
   log "video: $RF_PERSIST_BIN absent (build with native/build.sh); binding will be runtime-only"
 fi
 
+# minidhcpd (native/build.sh, the musl-static build): single-lease DHCP on the USB gadget link so
+# a phone/PC running a DHCP client gets an address on the gadget /24 (the Android app finds the
+# device by that subnet). Started by the usb-gadget service; absent, static-IP hosts still work.
+MINIDHCPD_BIN="$HERE/../native/build/minidhcpd-musl"
+if [ -f "$MINIDHCPD_BIN" ]; then
+  mkdir -p "$STAGE/usr/local/bin"
+  install -m 0755 "$MINIDHCPD_BIN" "$STAGE/usr/local/bin/minidhcpd"
+  log "net: staged minidhcpd -> /usr/local/bin/ (DHCP lease on the USB gadget link)"
+else
+  log "net: $MINIDHCPD_BIN absent (build with native/build.sh); USB hosts need a static IP"
+fi
+
 # Slot-switch helpers for the HUD's "Switch to Slot A" action: mtdtool (flips the gpt0 active bit;
 # native/build.sh) and wdt-reset (watchdog reset so the SPL boots the active slot; built from
 # glue/boot/wdt-reset.c). Both aarch64 static. Skipped if absent.
