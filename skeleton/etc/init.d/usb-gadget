@@ -27,6 +27,7 @@ HOST_MAC="@HOST_MAC@"
 GADGET_IP="@GADGET_IP@"
 GADGET_CIDR="@GADGET_CIDR@"
 HOST_GW="@HOST_GW@"
+HAS_SD="@HAS_SD@"                     # 1 if the board has a microSD slot; gates the MTP function
 
 # --- MTP (FunctionFS) knobs ---------------------------------------------------------------
 UMTPRD="/usr/local/bin/umtprd"
@@ -42,6 +43,7 @@ MTP_READY_DECISEC=50                 # readiness timeout: 50 * 0.1s = 5s, then d
 # and its descriptors written, ready for the UDC bind. Returns 0 if MTP is ready, 1 otherwise
 # (in which case any partial MTP state is torn down so it cannot block the ECM UDC bind).
 setup_mtp() {
+	[ "$HAS_SD" = "1" ]  || { einfo "MTP: board has no SD (HAS_SD=$HAS_SD); ECM-only"; return 1; }
 	[ -x "$UMTPRD" ]      || { einfo "MTP: $UMTPRD not installed; ECM-only"; return 1; }
 	[ -f "$UMTPRD_CONF" ] || { einfo "MTP: $UMTPRD_CONF missing; ECM-only"; return 1; }
 	[ -e "$MTP_DISABLE" ] && { einfo "MTP: disabled ($MTP_DISABLE present); ECM-only"; return 1; }

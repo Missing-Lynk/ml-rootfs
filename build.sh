@@ -137,7 +137,7 @@ else
 fi
 
 # Fail early on an incomplete profile rather than midway through the build.
-for v in HOSTNAME ROOT_PASS GADGET_IP GADGET_CIDR HOST_GW DEV_MAC HOST_MAC USB_PRODUCT \
+for v in HOSTNAME ROOT_PASS GADGET_IP GADGET_CIDR HOST_GW DEV_MAC HOST_MAC USB_PRODUCT HAS_SD \
          PARTITION PARTITION_PEBS PEB_SIZE MIN_IO SUBPAGE LEB_SIZE MAX_LEB_COUNT; do
   [ -n "${!v:-}" ] || die "device config $DEVICE_CONF: missing $v"
 done
@@ -453,6 +453,7 @@ sed -i \
   -e "s|@GADGET_CIDR@|$GADGET_CIDR|" \
   -e "s|@HOST_GW@|$HOST_GW|" \
   -e "s|@USB_PRODUCT@|$USB_PRODUCT|" \
+  -e "s|@HAS_SD@|$HAS_SD|" \
   "$STAGE/etc/init.d/usb-gadget"
 chmod 0755 "$STAGE/etc/init.d/usb-gadget"
 
