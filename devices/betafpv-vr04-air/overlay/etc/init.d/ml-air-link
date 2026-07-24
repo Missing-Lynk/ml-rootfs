@@ -1,13 +1,12 @@
 #!/sbin/openrc-run
 # Air-unit RF link at boot: run ml-linkd in air (TX) role, which transmits battery-voltage and
 # SoC-temperature telemetry to the goggle over sdio0. Association is chip-autonomous from the
-# artosyn_sdio insmod config, so no daemon is needed to associate - ml-linkd here is telemetry
-# (and later video), not link setup. Best-effort: a missing binary logs a warning and boot
-# continues.
+# artosyn_sdio insmod config, so no daemon is needed to associate. Best-effort: a missing binary
+# logs a warning and boot continues.
 #
-# RF bring-up (ml-rf-bringup) is done here only when the air baseband firmware is baked into
-# /lib/firmware; until then RF is brought up out of band (glue run-rf-test.sh) and ml-linkd waits
-# for sdio0 either way (it retries the bind + the IIO resolve every tick).
+# RF is brought up (ml-rf-bringup) when the air baseband firmware is present in /lib/firmware;
+# otherwise this logs a warning and starts ml-linkd, which waits for sdio0 (retrying the bind and
+# the IIO resolve every tick).
 description="Air-unit RF link: telemetry TX (ml-linkd --role air)"
 
 RF_BRINGUP=/usr/local/bin/ml-rf-bringup
@@ -32,7 +31,7 @@ start() {
 		start-stop-daemon --start --background --make-pidfile \
 			--pidfile /run/ml-linkd.pid --exec "$LINKD" \
 			--stdout /var/log/ml-linkd.log --stderr /var/log/ml-linkd.log \
-			-- --role air
+			-- --role air --hw-version "@HW_VERSION@"
 	else
 		ewarn "ml-air-link: $LINKD missing"
 	fi

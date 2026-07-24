@@ -461,6 +461,10 @@ chmod 0755 "$STAGE/etc/init.d/usb-gadget"
 # name matches the USB descriptor (skeleton/etc/umtprd.conf).
 [ -f "$STAGE/etc/umtprd.conf" ] && sed -i -e "s|@USB_PRODUCT@|$USB_PRODUCT|" "$STAGE/etc/umtprd.conf"
 
+# Template the hardware version into the air-unit link service (devices/betafpv-vr04-air overlay);
+# only present on the air unit, whose board.conf sets HW_VERSION.
+[ -f "$STAGE/etc/init.d/ml-air-link" ] && sed -i -e "s|@HW_VERSION@|${HW_VERSION:-V1.0}|" "$STAGE/etc/init.d/ml-air-link"
+
 # Precompute the root password hash (fixed salt -> reproducible /etc/shadow line).
 ROOT_HASH="$(openssl passwd -6 -salt artlynkopen "$ROOT_PASS")"
 
