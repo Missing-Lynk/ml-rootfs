@@ -148,6 +148,12 @@ if [ -e "$ROOT/etc/init.d/ml-video" ]; then
   ln -sf /etc/init.d/ml-video "$ROOT/etc/runlevels/default/ml-video"
 fi
 
+# Air-unit RF link autostart: ml-linkd in air (TX) role for telemetry. Present only in the air
+# device overlay (the goggle uses ml-video instead), so this enables nothing on the goggle.
+if [ -e "$ROOT/etc/init.d/ml-air-link" ]; then
+  ln -sf /etc/init.d/ml-air-link "$ROOT/etc/runlevels/default/ml-air-link"
+fi
+
 # Boot-count recorder, ordered after the usable-unit services (its depend()); marks a healthy boot
 # in the per-unit device record. Best-effort; skips cleanly if /usrdata or the binary is absent.
 if [ -e "$ROOT/etc/init.d/ml-boot-record" ]; then

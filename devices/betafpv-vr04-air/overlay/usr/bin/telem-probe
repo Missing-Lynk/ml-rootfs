@@ -1,0 +1,95 @@
+#!/bin/sh
+# telem-probe - one-shot air-unit telemetry acquisition probe. Reads the two SoC sensors the
+# air unit transmits to the goggle (battery voltage + junction temperature) from their IIO nodes
+# and prints every value needed to pin the board-specific battery divider against a multimeter.
+# Pure sysfs + awk, busybox-portable, nothing to compile.
+#
+# artosyn_adc and artosyn_protemp coldplug from their DT nodes at boot (once CONFIG_IIO is built
+# in), so normally the nodes are already present; this probe modprobes them anyway as a fallback.
+#
+#   telem-probe                    # load modules if needed, dump once
+#   MODDIR=/tmp telem-probe        # insmod artosyn_adc.ko / artosyn_protemp.ko from /tmp first
+#   WATCH=1 telem-probe            # repeat every second until Ctrl-C
+#
+# Battery: channel 1's in_voltageN_input is the calibrated ADC pin voltage in mV; the pack voltage
+# is pin_mV * board_divider. The divider is board-specific and UNKNOWN on this unit: the vendor air
+# firmware uses ~10.09 (ar_hal_adc_get_millivolt(1) / 0.099108025), the goggle board uses 20.7.
+# This probe prints both candidates AND every channel, so metering the real pack pins which channel
+# is the battery and the exact divider (divider = metered_pack_mV / pin_mV).
+
+DIV_AIR=10.09      # vendor air firmware divider (P1_SKY): 1 / 0.099108025
+DIV_GND=20.7       # goggle board divider (P1_GND), for reference
+
+# Optionally load the out-of-tree IIO providers from a staged directory (harmless if already up).
+if [ -n "${MODDIR:-}" ]; then
+	insmod "$MODDIR/artosyn_adc.ko" 2>/dev/null
+	insmod "$MODDIR/artosyn_protemp.ko" 2>/dev/null
+else
+	modprobe artosyn_adc 2>/dev/null
+	modprobe artosyn_protemp 2>/dev/null
+fi
+
+# Resolve an IIO device directory by its driver-set name (iio:deviceN indices are not stable).
+iio_by_name() {
+	want="$1"
+	for d in /sys/bus/iio/devices/iio:device*; do
+		[ -r "$d/name" ] || continue
+		if [ "$(cat "$d/name")" = "$want" ]; then
+			echo "$d"
+			return 0
+		fi
+	done
+	return 1
+}
+
+probe_once() {
+	adc="$(iio_by_name artosyn-adc || true)"
+	temp="$(iio_by_name temperature || true)"
+
+	echo "=== IIO devices ==="
+	for d in /sys/bus/iio/devices/iio:device*; do
+		[ -r "$d/name" ] && echo "  $d -> $(cat "$d/name")"
+	done
+
+	echo "=== ADC (artosyn-adc) all 8 channels: raw code + calibrated pin mV ==="
+	if [ -z "$adc" ]; then
+		echo "  NOT FOUND - is artosyn_adc loaded? (MODDIR=<dir with artosyn_adc.ko>)"
+	else
+		ch=0
+		while [ "$ch" -lt 8 ]; do
+			raw="$(cat "$adc/in_voltage${ch}_raw" 2>/dev/null)"
+			mv="$(cat "$adc/in_voltage${ch}_input" 2>/dev/null)"
+			# Candidate pack voltage at each divider, so the battery channel is easy to spot.
+			pack_air="$(awk -v m="${mv:-0}" -v d="$DIV_AIR" 'BEGIN{printf "%.2f", m*d/1000}')"
+			pack_gnd="$(awk -v m="${mv:-0}" -v d="$DIV_GND" 'BEGIN{printf "%.2f", m*d/1000}')"
+			echo "  ch${ch}: raw=${raw:-?}  pin=${mv:-?} mV  ->  pack@air(${DIV_AIR})=${pack_air} V  pack@gnd(${DIV_GND})=${pack_gnd} V"
+			ch=$((ch + 1))
+		done
+		echo "  (battery is the channel whose pack voltage matches the metered pack; vendor air uses ch1)"
+	fi
+
+	echo "=== Temperature (artosyn-protemp) ==="
+	if [ -z "$temp" ]; then
+		echo "  NOT FOUND - is artosyn_protemp loaded?"
+	else
+		traw="$(cat "$temp/in_temp_raw" 2>/dev/null)"
+		tsc="$(cat "$temp/in_temp_scale" 2>/dev/null)"
+		# in_temp_scale already carries whole degC; re-derive from raw as a cross-check.
+		if [ -n "$traw" ]; then
+			tder=$(( (traw * 5320 - 1373400) / 10000 ))
+		else
+			tder="?"
+		fi
+		echo "  raw=${traw:-?}  in_temp_scale=${tsc:-?} C  (derived=${tder} C)"
+	fi
+}
+
+if [ -n "${WATCH:-}" ]; then
+	while :; do
+		probe_once
+		echo "---"
+		sleep 1
+	done
+else
+	probe_once
+fi
