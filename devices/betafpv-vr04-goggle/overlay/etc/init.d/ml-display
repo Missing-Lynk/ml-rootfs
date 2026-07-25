@@ -72,6 +72,9 @@ start() {
 			sleep 0.1
 			i=$((i + 1))
 		done
+		# Without this the splash is skipped silently below and a dark panel has no
+		# attributable cause in the boot log.
+		[ -S "$SOCK" ] || ewarn "ml-display: $BROKER started but $SOCK never appeared in 5s - no splash (see /var/log/ml-drmfd.log)"
 	else
 		ewarn "ml-display: $BROKER missing - no broker, no splash"
 	fi

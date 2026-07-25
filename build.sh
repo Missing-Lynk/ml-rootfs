@@ -127,10 +127,13 @@ log "device: $DEV ($DEVICE_CONF)"
 # modules-load.d entry, no rc service) - load manually with insmod/modprobe once booted.
 # Skip silently if that build hasn't been run; the rootfs still builds without them.
 # shellcheck source=/dev/null
+# KERNEL_BUILD_DEFAULT comes from pin.env, so it is unset when the kernel checkout is
+# absent; the :- keeps that case out of `set -u`. An empty build dir leaves MODULES_STAGE
+# empty rather than rooted at /, which would otherwise resolve to the HOST's /lib/modules.
 source "$HERE/../kernel/scripts/pin.env" 2>/dev/null || true
-KERNEL_BUILD_DIR="${BUILD_DIR:-$KERNEL_BUILD_DEFAULT}"
-MODULES_STAGE="${MODULES_STAGE:-$KERNEL_BUILD_DIR/ml-modules/rootfs}"
-if [ -d "$MODULES_STAGE/lib/modules" ]; then
+KERNEL_BUILD_DIR="${BUILD_DIR:-${KERNEL_BUILD_DEFAULT:-}}"
+MODULES_STAGE="${MODULES_STAGE:-${KERNEL_BUILD_DIR:+$KERNEL_BUILD_DIR/ml-modules/rootfs}}"
+if [ -n "$MODULES_STAGE" ] && [ -d "$MODULES_STAGE/lib/modules" ]; then
   log "kernel modules: staging from $MODULES_STAGE"
   # Guard against shipping a display device an incomplete module stage: a stage that was left
   # stale or built for a no-display kernel lacks the DRM stack, and the panel then stays dark
@@ -145,7 +148,7 @@ if [ -d "$MODULES_STAGE/lib/modules" ]; then
     done
   fi
 else
-  log "kernel modules: none staged at $MODULES_STAGE (build with kernel/modules/build.sh); skipping"
+  log "kernel modules: none staged at ${MODULES_STAGE:-<no kernel build dir>} (build with kernel/modules/build.sh); skipping"
   MODULES_STAGE=""
 fi
 
