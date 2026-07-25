@@ -244,27 +244,44 @@ fi
 # both blobs in at request_firmware's default search path - then a flashed image needs no
 # host push or firmware_class path override to bring RF up. The device reset + insmod
 # sequence itself stays in glue/dev/rf-bringup.sh (bring-up is never baked into the image).
-RF_FW="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_demo_gnd_d.img"
-RF_CFG="$VENDOR_BLOBS/tmp/ar813x/bb_config_gnd.json.usr_cfg.json"
-if [ -f "$RF_FW" ] && [ -f "$RF_CFG" ]; then
-  mkdir -p "$STAGE/lib/firmware"
-  cp "$RF_FW"  "$STAGE/lib/firmware/bb_demo_gnd_d.img"
-  cp "$RF_CFG" "$STAGE/lib/firmware/bb_config_gnd.json.usr_cfg.json"
-
-  # The Normal/Race band is the config's chan_valid_bmp, which only enters the chip at firmware
-  # upload, so each band is a whole config blob and switching one costs a boot. The captured blob
-  # is a race-mode one (0x0007FFF8 = table indices 3..18); derive the normal variant (0x00000007 =
-  # 5758/5788/5828) by rewriting that one field. ml-video picks between the two at boot.
-  sed 's/"chan_valid_bmp":\([[:space:]]*\)"0x0007FFF8"/"chan_valid_bmp":\1"0x00000007"/I' \
-      "$RF_CFG" > "$STAGE/lib/firmware/bb_config_gnd.json.normal_cfg.json"
-  if ! grep -qi '"chan_valid_bmp":[[:space:]]*"0x00000007"' \
-        "$STAGE/lib/firmware/bb_config_gnd.json.normal_cfg.json"; then
-    die "RF firmware: chan_valid_bmp not rewritten in $RF_CFG - normal-band config would be a race blob"
+# Selected by the device's RF_ROLE (board.conf): "air" bakes the air TX firmware, anything else
+# (default "ground") bakes the goggle/RX firmware. Keeps each device's own blob without the other.
+if [ "${RF_ROLE:-ground}" = "air" ]; then
+  # Air (TX): the air baseband image + its minified stock-merge config. ml-air-link brings RF up at
+  # boot from these; the config's channel set is already baked, so there is no race/normal split.
+  RF_FW="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_demo_air_d.img"
+  RF_CFG="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_config_air.json"
+  if [ -f "$RF_FW" ] && [ -f "$RF_CFG" ]; then
+    mkdir -p "$STAGE/lib/firmware"
+    cp "$RF_FW"  "$STAGE/lib/firmware/bb_demo_air_d.img"
+    cp "$RF_CFG" "$STAGE/lib/firmware/bb_config_air.json"
+    log "RF firmware: staged bb_demo_air_d.img + bb_config_air.json -> /lib/firmware/ (air role)"
+  else
+    log "RF firmware: $RF_FW / $RF_CFG absent; air RF bring-up will need them pushed at runtime"
   fi
-
-  log "RF firmware: staged bb_demo_gnd_d.img + race/normal configs -> /lib/firmware/"
 else
-  log "RF firmware: $RF_FW / $RF_CFG absent; RF bring-up will push them at runtime (glue/dev/rf-bringup.sh -> /run/ml/fw)"
+  RF_FW="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_demo_gnd_d.img"
+  RF_CFG="$VENDOR_BLOBS/tmp/ar813x/bb_config_gnd.json.usr_cfg.json"
+  if [ -f "$RF_FW" ] && [ -f "$RF_CFG" ]; then
+    mkdir -p "$STAGE/lib/firmware"
+    cp "$RF_FW"  "$STAGE/lib/firmware/bb_demo_gnd_d.img"
+    cp "$RF_CFG" "$STAGE/lib/firmware/bb_config_gnd.json.usr_cfg.json"
+
+    # The Normal/Race band is the config's chan_valid_bmp, which only enters the chip at firmware
+    # upload, so each band is a whole config blob and switching one costs a boot. The captured blob
+    # is a race-mode one (0x0007FFF8 = table indices 3..18); derive the normal variant (0x00000007 =
+    # 5758/5788/5828) by rewriting that one field. ml-video picks between the two at boot.
+    sed 's/"chan_valid_bmp":\([[:space:]]*\)"0x0007FFF8"/"chan_valid_bmp":\1"0x00000007"/I' \
+        "$RF_CFG" > "$STAGE/lib/firmware/bb_config_gnd.json.normal_cfg.json"
+    if ! grep -qi '"chan_valid_bmp":[[:space:]]*"0x00000007"' \
+          "$STAGE/lib/firmware/bb_config_gnd.json.normal_cfg.json"; then
+      die "RF firmware: chan_valid_bmp not rewritten in $RF_CFG - normal-band config would be a race blob"
+    fi
+
+    log "RF firmware: staged bb_demo_gnd_d.img + race/normal configs -> /lib/firmware/"
+  else
+    log "RF firmware: $RF_FW / $RF_CFG absent; RF bring-up will push them at runtime (glue/dev/rf-bringup.sh -> /run/ml/fw)"
+  fi
 fi
 
 # Display bring-up (the ml-display boot service, in the goggle device overlay): the
@@ -315,13 +332,30 @@ fi
 # plugin registry) plus the static RF daemon ml-linkd. With ml-drmfd + ml-hud (above) and the kernel
 # modules + codec fw (already in this rootfs), RF video runs with NO SD card. The SD squashfs
 # (userspace/gstreamer/scripts/deploy.sh) stays the development track. Both optional; skipped if not built.
-PIPELINE_BIN="$US/gstreamer/build/static/ml-pipeline"
-if [ -f "$PIPELINE_BIN" ]; then
-  mkdir -p "$STAGE/usr/local/bin"
-  install -m 0755 "$PIPELINE_BIN" "$STAGE/usr/local/bin/ml-pipeline"
-  log "video: staged ml-pipeline (standalone static) -> /usr/local/bin/"
-else
-  log "video: $PIPELINE_BIN absent (build with userspace/gstreamer/scripts/build-static.sh); skipping"
+# ml-pipeline is the decode/display binary; the display-less air unit never runs it (no ml-video
+# service) and it is ~10 MiB on a tight partition, so stage it only on devices with a display.
+if [ "$DEV" != "betafpv-vr04-air" ]; then
+  PIPELINE_BIN="$US/gstreamer/build/static/ml-pipeline"
+  if [ -f "$PIPELINE_BIN" ]; then
+    mkdir -p "$STAGE/usr/local/bin"
+    install -m 0755 "$PIPELINE_BIN" "$STAGE/usr/local/bin/ml-pipeline"
+    log "video: staged ml-pipeline (standalone static) -> /usr/local/bin/"
+  else
+    log "video: $PIPELINE_BIN absent (build with userspace/gstreamer/scripts/build-static.sh); skipping"
+  fi
+fi
+
+# Air-unit synthetic video TX (production track): the standalone fully-static ml-air-video (same
+# gst-full mechanism as ml-pipeline, videotestsrc -> two H.265 tiles -> :10001). Air unit only.
+if [ "$DEV" = "betafpv-vr04-air" ]; then
+  AIR_VIDEO_BIN="$US/gstreamer/build/static/ml-air-video"
+  if [ -f "$AIR_VIDEO_BIN" ]; then
+    mkdir -p "$STAGE/usr/local/bin"
+    install -m 0755 "$AIR_VIDEO_BIN" "$STAGE/usr/local/bin/ml-air-video"
+    log "video: staged ml-air-video (standalone static) -> /usr/local/bin/"
+  else
+    log "video: $AIR_VIDEO_BIN absent (build with userspace/gstreamer/scripts/build-static.sh); skipping"
+  fi
 fi
 
 LINKD_BIN="$US/build/ml-linkd"

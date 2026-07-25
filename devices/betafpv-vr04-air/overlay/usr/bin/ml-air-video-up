@@ -1,0 +1,21 @@
+#!/bin/sh
+# ml-air-video-up - start the air-unit synthetic two-tile H.265 transmitter by hand.
+#
+# Ensures the wave5 V4L2 encoder node is present, then runs ml-air-video, which sends the video to
+# the goggle on 10.0.0.1:10001 over sdio0. The RF link (ml-air-link / ml-rf-bringup) must be up;
+# ml-air-video retries its sends until sdio0 exists, so start order is not critical.
+#
+# Tunables pass through as ml-air-video environment (ML_AIR_FPS, ML_AIR_PATTERN, ML_AIR_ENC,
+# ML_AIR_VERBOSE, ...). Any argument is forwarded verbatim.
+set -eu
+
+AIR_VIDEO=/usr/local/bin/ml-air-video
+
+# wave5 has a DT node and normally coldplugs; load it defensively in case it did not.
+modprobe wave5 2>/dev/null || true
+
+if [ ! -e /dev/video0 ]; then
+	echo "ml-air-video-up: no /dev/video* - wave5 encoder node absent (check the AU DTB codec node)" >&2
+fi
+
+exec "$AIR_VIDEO" "$@"
