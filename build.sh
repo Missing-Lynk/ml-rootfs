@@ -132,6 +132,18 @@ KERNEL_BUILD_DIR="${BUILD_DIR:-$KERNEL_BUILD_DEFAULT}"
 MODULES_STAGE="${MODULES_STAGE:-$KERNEL_BUILD_DIR/ml-modules/rootfs}"
 if [ -d "$MODULES_STAGE/lib/modules" ]; then
   log "kernel modules: staging from $MODULES_STAGE"
+  # Guard against shipping a display device an incomplete module stage: a stage that was left
+  # stale or built for a no-display kernel lacks the DRM stack, and the panel then stays dark
+  # with no visible cause (the failure that motivated this guard). Only enforced when a stage is
+  # present AND this device has a panel; a deliberately module-less build still logs and skips
+  # above. `make kernel` also asserts this stage-side (kernel/modules/stage.sh), so this is the
+  # belt-and-braces net for the case where rootfs is rebuilt against a pre-existing bad stage.
+  if [ "${HAS_DISPLAY:-0}" = 1 ]; then
+    for ko in artosyn_vo.ko drm.ko; do
+      find "$MODULES_STAGE/lib/modules" -name "$ko" | grep -q . \
+        || die "kernel modules: HAS_DISPLAY=1 but $ko missing from $MODULES_STAGE (stale/incomplete stage; rebuild with 'make kernel')"
+    done
+  fi
 else
   log "kernel modules: none staged at $MODULES_STAGE (build with kernel/modules/build.sh); skipping"
   MODULES_STAGE=""
@@ -139,7 +151,7 @@ fi
 
 # Fail early on an incomplete profile rather than midway through the build.
 for v in HOSTNAME ROOT_PASS GADGET_IP GADGET_CIDR HOST_GW DEV_MAC HOST_MAC USB_PRODUCT HAS_SD \
-         PARTITION PARTITION_PEBS PEB_SIZE MIN_IO SUBPAGE LEB_SIZE MAX_LEB_COUNT; do
+         HAS_DISPLAY PARTITION PARTITION_PEBS PEB_SIZE MIN_IO SUBPAGE LEB_SIZE MAX_LEB_COUNT; do
   [ -n "${!v:-}" ] || die "device config $DEVICE_CONF: missing $v"
 done
 
