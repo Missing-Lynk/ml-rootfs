@@ -5,9 +5,9 @@
 #
 # Per-device specifics live in devices/<name>/: board.conf (identity/addressing + NAND geometry)
 # and overlay/ (the device-specific OpenRC services + modules-load, layered on the shared
-# skeleton/). Arg 1 = the device name; default = the goggle.
+# skeleton/). Arg 1 = the device name (required, no default).
 #
-#   build.sh [<device-name>]          # default: betafpv-vr04-goggle
+#   build.sh <device-name>            # e.g. betafpv-vr04-goggle
 #
 # No root required: the rootfs is built under `fakeroot` (so files are recorded root:root),
 # apk-tools-static is run from a local sha-verified extract, and the image is generated
@@ -108,9 +108,10 @@ APK_STATIC_URL="$MAIN_REPO/$HOST_ARCH/$APK_STATIC_PKG"
 
 # Everything per-device lives in devices/<name>/: board.conf (target identity/addressing + NAND
 # geometry) and overlay/ (the device-specific OpenRC services + modules-load, layered on the
-# shared skeleton/ below). Arg 1 = the device name; default = the goggle. Same names as the root
+# shared skeleton/ below). Arg 1 = the device name (required, no default). Same names as the root
 # Makefile DEVICE and kernel/devices/<name>/. See plans/device-hal.md.
-DEV="${1:-betafpv-vr04-goggle}"
+DEV="${1:-}"
+[ -n "$DEV" ] || die "no device given (arg 1); pass a device name, e.g. betafpv-vr04-goggle"
 DEVICE_DIR="$HERE/devices/$DEV"
 DEVICE_CONF="$DEVICE_DIR/board.conf"
 DEVICE_OVERLAY="$DEVICE_DIR/overlay"
@@ -506,8 +507,8 @@ ROOT_HASH="$(openssl passwd -6 -salt artlynkopen "$ROOT_PASS")"
 # Build + configure + image, all inside one fakeroot session so file ownership recorded
 # into the UBIFS image is root:root throughout.
 # ======================================================================================
-UBIFS_IMG="$OUT/rootfs.ubifs"
-UBI_IMG="$OUT/rootfs.ubi"
+UBIFS_IMG="$OUT/rootfs-$DEV.ubifs"
+UBI_IMG="$OUT/rootfs-$DEV.ubi"
 UBINIZE_CFG="$WORK/ubinize.cfg"
 cat > "$UBINIZE_CFG" <<EOF
 [rootfs]
@@ -553,7 +554,7 @@ echo "=================================================================="
 # Fail on overflow up front; the stats themselves print LAST so they don't scroll away
 # behind the package list.
 if [ "$UBI_BYTES" -ge "$LIMIT" ]; then
-  die "rootfs.ubi ($UBI_BYTES) does NOT fit in $PARTITION ($LIMIT)"
+  die "$(basename "$UBI_IMG") ($UBI_BYTES) does NOT fit in $PARTITION ($LIMIT)"
 fi
 
 echo "Installed packages:"

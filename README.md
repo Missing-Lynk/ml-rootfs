@@ -4,7 +4,7 @@ A reproducible Alpine Linux aarch64 root filesystem for the open mainline Linux 
 
 ## What the image is
 
-`build/rootfs.ubi` is a UBI image containing a single auto-resizing dynamic volume named `rootfs` that holds an uncompressed UBIFS filesystem. It is Alpine 3.24.1 aarch64 built fresh with `apk.static --initdb`. The base package set (both flavors) is intentionally tiny: `alpine-base`, `busybox`, `openrc`, `dropbear` (SSH), `iproute2` - busybox supplies the `less`/`mount`/`blkid`/`fdisk`/`losetup`/`getty` applets, so no `util-linux` or `less` package is needed. The `dev` flavor adds `openssh-sftp-server` (enables scp/sftp), `util-linux`, and `strace`/`tcpdump`/`htop`; `slim` ships the base only. The build is pinned (Alpine 3.24.1 minirootfs sha256-verified for the signing keys, apk-tools-static 3.0.6-r0) and runs entirely on the host with no root and without touching any hardware, under `fakeroot` so the files land in the image as `root:root`.
+`build/rootfs-<device>.ubi` is a UBI image containing a single auto-resizing dynamic volume named `rootfs` that holds an uncompressed UBIFS filesystem. It is Alpine 3.24.1 aarch64 built fresh with `apk.static --initdb`. The base package set (both flavors) is intentionally tiny: `alpine-base`, `busybox`, `openrc`, `dropbear` (SSH), `iproute2` - busybox supplies the `less`/`mount`/`blkid`/`fdisk`/`losetup`/`getty` applets, so no `util-linux` or `less` package is needed. The `dev` flavor adds `openssh-sftp-server` (enables scp/sftp), `util-linux`, and `strace`/`tcpdump`/`htop`; `slim` ships the base only. The build is pinned (Alpine 3.24.1 minirootfs sha256-verified for the signing keys, apk-tools-static 3.0.6-r0) and runs entirely on the host with no root and without touching any hardware, under `fakeroot` so the files land in the image as `root:root`.
 
 Root password is `libre` and the hostname is `artosyn-libre`. Dropbear permits root password login and generates its host keys on first boot into `/etc/dropbear`. In the `dev` flavor `openssh-sftp-server` is installed at `/usr/lib/ssh/sftp-server`, which dropbear serves as its SFTP subsystem automatically (no config), so `scp`, `sftp`, and file-manager mounts work; `slim` has no scp (update it by reflashing).
 
@@ -17,12 +17,12 @@ On boot an OpenRC service (`/etc/init.d/usb-gadget`, in the `boot` runlevel) bri
 Run on the host (needs internet, `fakeroot`, `openssl`, `qemu-aarch64-static` from `qemu-user-static`, and `mkfs.ubifs`/`ubinize` from `mtd-utils`). The whole build runs as plain host processes, no container and no root. The only downloads are the pinned, sha256-verified Alpine build inputs (`apk.static` and the signing keys), cached under the gitignored `build/dl/`:
 
 ```sh
-build.sh                       # dev flavor (default), default device (betafpv-vr04-goggle)
-FLAVOR=slim build.sh           # lean production image
+build.sh betafpv-vr04-goggle   # dev flavor (default); device name is required (no default)
+FLAVOR=slim build.sh betafpv-vr04-goggle   # lean production image
 build.sh <device-name>         # or for another device (still FLAVOR-aware)
 ```
 
-The flavor is chosen with the `FLAVOR` env var (`dev` default, or `slim`); the positional arg is the device name, resolving `devices/<name>/board.conf` + `devices/<name>/overlay/`. `dev` is the full bring-up platform (scp/sftp, util-linux, strace/tcpdump/htop); `slim` strips those to a 5-package busybox base for a smaller image. Both record their identity in `/etc/ml-flavor`. It prints the flavor, the final `rootfs.ubi` size, and the installed package list. All regenerable output (the images, the scratch `work/` tree, and the cached, verified downloads in `dl/`) lands under the gitignored `build/`; re-running rebuilds from those cached downloads.
+The flavor is chosen with the `FLAVOR` env var (`dev` default, or `slim`); the positional arg is the device name, resolving `devices/<name>/board.conf` + `devices/<name>/overlay/`. `dev` is the full bring-up platform (scp/sftp, util-linux, strace/tcpdump/htop); `slim` strips those to a 5-package busybox base for a smaller image. Both record their identity in `/etc/ml-flavor`. It prints the flavor, the final `rootfs-<device>.ubi` size, and the installed package list. The images are named per device (`rootfs-<device>.ubi` / `.ubifs`), so builds for different devices coexist; the scratch `work/` tree and the cached, verified downloads in `dl/` are shared. All regenerable output lands under the gitignored `build/`; re-running rebuilds from those cached downloads.
 
 The static config files dropped into the image live as an editable tree under `skeleton/` (copied verbatim into the rootfs); the gadget service `skeleton/etc/init.d/usb-gadget` carries `@...@` placeholders that `build.sh` fills in from the device profile. Only the handful of files that depend on build variables (`/etc/hostname`, `/etc/hosts`, `/etc/apk/repositories`) are still generated in `build.sh`. The fakeroot build body is `scripts/make-rootfs.sh`.
 
@@ -47,7 +47,7 @@ The RF video pipeline is the production (rootfs) track: `build.sh` stages the st
 
 ### Device profiles
 
-Everything per-device lives in `devices/<name>/`: `board.conf` (target hostname/password, the USB ECM addressing and MACs, and the NAND/UBI geometry + target partition) and `overlay/` (the device-specific OpenRC services + `modules-load.d`, layered on the shared `skeleton/`). `build.sh` takes the device name (first argument, default `betafpv-vr04-goggle`) and resolves both. To add a device, create `devices/<name>/board.conf` (+ `overlay/` for any device-specific services) and pass `<name>`. The build fails early if `board.conf` is missing a required variable. Service enablement (`scripts/make-rootfs.sh`) is file-presence-gated, so a device whose overlay omits a service (e.g. no `ml-display`) simply never enables it.
+Everything per-device lives in `devices/<name>/`: `board.conf` (target hostname/password, the USB ECM addressing and MACs, and the NAND/UBI geometry + target partition) and `overlay/` (the device-specific OpenRC services + `modules-load.d`, layered on the shared `skeleton/`). `build.sh` takes the device name (first argument, required) and resolves both. To add a device, create `devices/<name>/board.conf` (+ `overlay/` for any device-specific services) and pass `<name>`. The build fails early if `board.conf` is missing a required variable. Service enablement (`scripts/make-rootfs.sh`) is file-presence-gated, so a device whose overlay omits a service (e.g. no `ml-display`) simply never enables it.
 
 ## Flash
 
@@ -59,7 +59,7 @@ Identify the right `mtdN` first:
 
 ```sh
 cat /proc/mtd                              # find the number whose name is "userapp1"
-ubiformat /dev/mtdN -f rootfs.ubi          # mtdN = the userapp1 partition
+ubiformat /dev/mtdN -f rootfs-<device>.ubi     # mtdN = the userapp1 partition
 ```
 
 `ubiformat -f` erases the partition, writes the image, and preserves/initialises erase counters. The volume is flagged `autoresize`, so on first attach UBI grows the `rootfs` volume to fill the whole partition.
