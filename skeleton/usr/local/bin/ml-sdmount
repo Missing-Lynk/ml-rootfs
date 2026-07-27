@@ -9,6 +9,10 @@
 MNT=/mnt/sdcard
 LOCK=/run/ml-sdmount.lock
 
+# Card selection is shared with ml-sdformat so a mount and a format cannot pick different devices.
+# shellcheck source=../lib/ml-sd.sh
+. /usr/local/lib/ml-sd.sh
+
 # Run the reconcile detached and flock-serialised, then return at once. No caller ever blocks on a
 # (possibly slow) card mount: the boot services, the mdev -s coldplug, and the hotplug daemon all
 # continue immediately while the mount/unmount completes in the background - the card then appears in
@@ -21,11 +25,6 @@ if [ "${ML_SDMOUNT_LOCKED:-}" != 1 ]; then
 	exit 0
 fi
 
-# The source mounted at $MNT (last match wins, i.e. the top of any stack), or empty if nothing is.
-mounted_source() {
-	awk -v mountpoint="$MNT" '$2 == mountpoint { source = $1 } END { print source }' /proc/mounts
-}
-
 # Mount the read-only placeholder: a tmpfs carrying just the No_SD_Card.txt marker. Mounted read-write
 # to write the marker, then remounted read-only so neither the MTP host nor a stray DVR write can put
 # anything on it.
@@ -36,29 +35,14 @@ mount_placeholder() {
 	mount -o remount,ro "$MNT"
 }
 
-# The card enumerates as mmcblk0 or mmcblk1 (index depends on probe order). Prefer its first partition,
-# else the whole device (cards are sometimes formatted without a partition table).
-card_device() {
-	local base
-	for base in /dev/mmcblk0 /dev/mmcblk1; do
-		if [ -b "${base}p1" ]; then
-			echo "${base}p1"
-			return
-		elif [ -b "$base" ]; then
-			echo "$base"
-			return
-		fi
-	done
-}
-
-card="$(card_device)"
+card="$(sd_mount_source)"
 
 # A remove event means the card is on its way out even while its node still lingers.
 [ "$ACTION" = "remove" ] && card=
 
 if [ -n "$card" ]; then
 	# A card is present: make sure the card, not the placeholder, is what is mounted.
-	case "$(mounted_source)" in
+	case "$(sd_mounted_source "$MNT")" in
 		/dev/mmcblk*)
 			exit 0 ;;                       # the card is already mounted
 	esac
@@ -76,7 +60,7 @@ if [ -n "$card" ]; then
 fi
 
 # No usable card: make sure the read-only placeholder is what is mounted.
-case "$(mounted_source)" in
+case "$(sd_mounted_source "$MNT")" in
 	tmpfs)
 		exit 0 ;;                            # the placeholder is already up
 	/dev/mmcblk*)

@@ -119,6 +119,11 @@ if [ -e "$ROOT/etc/init.d/ml-display" ]; then
   ln -sf /etc/init.d/ml-display "$ROOT/etc/runlevels/boot/ml-display"
 fi
 
+# ml-sdmount and ml-sdformat source their card selection from this library. Without it the mount
+# fails at boot and the format aborts with an unbound function, so a missing file must fail the
+# build rather than ship an image whose SD card never appears.
+[ -f "$ROOT/usr/local/lib/ml-sd.sh" ] || { echo "make-rootfs: /usr/local/lib/ml-sd.sh missing from the overlay" >&2; exit 1; }
+
 # SD card mount at /mnt/sdcard, ordered after coldplug and before ml-hud.
 if [ -e "$ROOT/etc/init.d/ml-sdcard" ]; then
   ln -sf /etc/init.d/ml-sdcard "$ROOT/etc/runlevels/default/ml-sdcard"

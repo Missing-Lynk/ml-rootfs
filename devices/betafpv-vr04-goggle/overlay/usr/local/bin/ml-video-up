@@ -7,7 +7,7 @@
 # Prerequisites come from the boot services and this rootfs: ml-display (the DRM broker + CRTC
 # modeset), ml-hud (the OSD overlay), the kernel modules (wave5, ml_dmablit, artosyn_vo, loaded via
 # modules-load.d) and the codec firmware. The RF daemon ml-linkd associates the link and gates the
-# video handshake; it is started here if not already running.
+# video handshake; the ml-video init script owns it, and this script only reports its absence.
 #
 # Source arg: `rf` (the RF UDP downlink) is the default. RF chip bring-up (releasing the AR8030 from
 # reset) is a separate concern and must have happened before the link can associate.
@@ -16,11 +16,27 @@ set -e
 [ -e /run/missinglynk/drm.sock ] || { echo "FATAL: no DRM broker (/run/missinglynk/drm.sock). Is ml-display up?"; exit 1; }
 [ -e /dev/ml-dmablit ] || echo "WARN: /dev/ml-dmablit absent -> CPU-blit fallback (~40 fps). Is ml_dmablit loaded?"
 
-# Start the RF daemon if it is not already up (bracket trick: busybox pgrep -f self-matches).
-if ! pgrep -f '[m]l-linkd' >/dev/null 2>&1; then
-    echo "ml-video-up: starting ml-linkd"
-    setsid ml-linkd >/var/log/ml-linkd.log 2>&1 < /dev/null &
-fi
+# ml-linkd has exactly one owner: the ml-video init script, which starts it under a pidfile. Warn
+# only, never spawn. A second linkd fights the first over the RF control plane, and one started
+# here would carry no pidfile, so `rc-service ml-video stop` could not reach it and it would
+# interleave into the same log file as the survivor. Match on /proc/*/comm rather than pgrep:
+# busybox pgrep -x is unreliable here and pgrep -f matches this script's own command line.
+#
+# Poll rather than test once. The init script backgrounds ml-linkd immediately before backgrounding
+# this script, so both are racing their own exec; a single check would warn on a healthy boot often
+# enough to make the warning worth ignoring, which is the opposite of the point.
+linkd=""
+tries=0
+while [ "$tries" -lt 10 ]; do
+    if grep -qx ml-linkd /proc/[0-9]*/comm 2>/dev/null; then
+        linkd=1
+        break
+    fi
+
+    tries=$((tries + 1))
+    sleep 0.5
+done
+[ -n "$linkd" ] || echo "WARN: no ml-linkd after 5s -> the RF link will not associate and no video will flow. Is ml-video up?"
 
 # dec_cap_bufs MUST be 0 (stock depth): any cap below the stream's fbc_buf_count (9) makes the
 # wave5 firmware spin on display-buffer-full - decode drops to ~25-40 fps with both cores pegged.

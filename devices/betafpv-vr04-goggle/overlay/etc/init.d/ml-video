@@ -45,7 +45,11 @@ rf_up() {
 	# into candidate.slot under /usrdata). ml-rf-bringup writes ML_RF_FW_PATH to the kernel firmware
 	# search path, tried before /lib/firmware: the edited cfg wins when present, else the baked cfg
 	# (and always the baked bb_demo_gnd_d.img, which is never copied) is used.
-	ML_RF_FW_PATH=/usrdata/missinglynk "$RF_BRINGUP" "$RF_FW" "$cfg"
+	# Bounded, because this runs in the foreground of the default runlevel: a bring-up that wedges
+	# rather than fails (the AR8030 sometimes powers up answering a garbage SDIO devid) would
+	# otherwise stall the rest of boot indefinitely. A timeout exits non-zero, so the caller's
+	# "RF bring-up incomplete" warning covers a hang exactly as it covers a failure.
+	ML_RF_FW_PATH=/usrdata/missinglynk timeout 30 "$RF_BRINGUP" "$RF_FW" "$cfg"
 }
 
 start() {

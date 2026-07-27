@@ -1,33 +1,40 @@
 #!/bin/sh
 # Format the external SD card as one whole-device filesystem and remount it at /mnt/sdcard. exFAT by
 # default (no 4 GB per-file limit); FAT32 if mkfs.exfat is absent. Run by the DVR menu's Format action
-# after its confirm. Only mmcblk1+ (external SD) is written; mmcblk0 is internal and never touched.
+# after its confirm.
 set -u
-export PATH=/bin:/sbin:/usr/bin:/usr/sbin:$PATH
+export PATH="/bin:/sbin:/usr/bin:/usr/sbin:$PATH"
 FS="${1:-exFAT}"
 MNT=/mnt/sdcard
+
+# Card selection is shared with ml-sdmount so a format cannot pick a different device than the mount.
+# shellcheck source=../lib/ml-sd.sh
+. /usr/local/lib/ml-sd.sh
 
 # However this exits (freshly-formatted card, or any failure along the way), reconcile /mnt/sdcard back
 # to a valid mount so it is never left as the bare rootfs directory: ml-sdmount mounts the card if one
 # is usable, otherwise the read-only no-card placeholder.
 trap '/usr/local/bin/ml-sdmount' EXIT
 
-DEV=""
-for n in 1 2 3 4 5 6 7 8 9; do
-	if [ -b "/dev/mmcblk${n}" ]; then
-		DEV="/dev/mmcblk${n}"
-		break
-	fi
-done
-[ -n "$DEV" ] || { echo "ml-sdformat: no external SD (mmcblk1+)"; exit 1; }
+# Derive the target from what is actually the card, never from a fixed index. What is mounted at
+# $MNT wins, so the device the running system already accepted as the card is the one that gets
+# wiped; only with nothing mounted there does this fall back to the shared selection. Both are read
+# before the unmounts below, which would otherwise erase the evidence.
+DEV="$(sd_mounted_source "$MNT")"
+case "$DEV" in
+	/dev/mmcblk*) DEV="$(sd_whole_device "$DEV")" ;;
+	*)            DEV="$(sd_card_device)" ;;
+esac
+[ -n "$DEV" ] || { echo "ml-sdformat: no SD card found"; exit 1; }
 echo "ml-sdformat: formatting $DEV as $FS"
 
 umount "$MNT" 2>/dev/null
 umount -l "$MNT" 2>/dev/null
 sync
 
-# Abort rather than risk corruption if an open writer still holds the device.
-if grep -q "^${DEV}" /proc/mounts; then
+# Abort rather than risk corruption if an open writer still holds the device. The trailing [p ]
+# matches the whole device and any of its partitions, without /dev/mmcblk1 also matching mmcblk10.
+if grep -q "^${DEV}[p ]" /proc/mounts; then
 	echo "ml-sdformat: $DEV still in use, aborting"
 	exit 1
 fi

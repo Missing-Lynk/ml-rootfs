@@ -3,7 +3,7 @@
 # samples a few /proc counters so a session can be analysed after the fact (RF/SDIO resets, wave5
 # codec errors, CMA exhaustion, OOM). Started by the ml-logd init script only when /mnt/sdcard is
 # mounted. Best-effort and bounded: one numbered directory per run, keep the last KEEP, cap the
-# kmsg file. Runs are numbered (run-NNNN) off a persistent counter, never dated - the clock is not
+# kmsg file. Runs are numbered (run-NNNNNN) off a persistent counter, never dated - the clock is not
 # trustworthy on this device, so ordering must not depend on it.
 #
 # Design is deliberately cheap: `cat /dev/kmsg` is a blocking read (0% CPU when the kernel is quiet,
@@ -14,7 +14,7 @@
 # Correlate the three streams (kernel.log timestamps, stats.csv uptime_s, ml-linkd's rf.log uptime)
 # on the shared CLOCK_MONOTONIC axis - they line up even before ntp sets wall time.
 set -u
-export PATH=/bin:/sbin:/usr/bin:/usr/sbin:$PATH
+export PATH="/bin:/sbin:/usr/bin:/usr/sbin:$PATH"
 
 LOGROOT=/mnt/sdcard/logs
 KEEP=10                          # session directories to retain
@@ -29,16 +29,40 @@ mkdir -p "$LOGROOT" || { echo "ml-logd: cannot create $LOGROOT"; exit 0; }
 CF="$LOGROOT/.runcount"
 n=0
 [ -f "$CF" ] && read n < "$CF" 2>/dev/null
+# A power cut mid-write, or the FAT/exFAT damage a battery-out pull leaves behind, leaves this file
+# holding something that is not a run number, and $((n + 1)) on that misbehaves in two ways.
+# Measured under busybox ash: "12x", "3.5" and anything with an embedded space abort the script with
+# "arithmetic syntax error", and because the bad file persists the logger then dies on every
+# subsequent boot; "-1" and "0x1f" are instead accepted silently and give a negative or wrong run
+# number. (An empty file and a purely alphabetic one are harmless: ash reads them as an unset
+# variable, i.e. 0.) Anything that is not a plain decimal number restarts the count.
+case "${n:-}" in
+	''|*[!0-9]*) n=0 ;;
+esac
+
 n=$((n + 1))
 echo "$n" > "$CF"
-RUN="$(printf 'run-%04d' "$n")"
+RUN="$(printf 'run-%06d' "$n")"
 SDIR="$LOGROOT/$RUN"
 mkdir -p "$SDIR"
 
-# Prune to the last KEEP runs, ordered by run number (zero-padded, so lexical sort == numeric).
-# Sorting by number, not mtime, keeps retention correct even with a wrong/rewound clock.
-ls -1d "$LOGROOT"/run-*/ 2>/dev/null | sort -r | tail -n +$((KEEP + 1)) | while read -r old; do
-	rm -rf "$old"
+# Prune to the last KEEP runs, ordered by run NUMBER rather than mtime, so retention stays correct
+# with a wrong or rewound clock. The sort is numeric, not lexical: a lexical sort puts run-10000
+# below run-9999, and would put a padding-width change or a counter reset (above) below every
+# existing directory, in each case pruning the run that just started. The current run is dropped
+# from the candidate list outright, so no ordering mistake can ever delete the live session. KEEP
+# counts that current run, so the tail offset is KEEP and not KEEP + 1.
+for old in "$LOGROOT"/run-*/; do
+	[ -d "$old" ] || continue
+	[ "$old" = "$SDIR/" ] && continue
+	num="${old%/}"
+	num="${num##*/run-}"
+	case "$num" in
+		''|*[!0-9]*) continue ;;
+	esac
+	echo "$num $old"
+done | sort -rn | tail -n +"$KEEP" | while read -r _ old; do
+	rm -rf "${old:?}"
 done
 
 # One-time context snapshot so a session is self-describing.
@@ -57,6 +81,11 @@ KERN="$SDIR/kernel.log"
 STATS="$SDIR/stats.csv"
 KPID=""
 
+# Opening /dev/kmsg positions at the OLDEST record still in the ring, so every call after the first
+# re-appends the whole ring buffer. Rotation avoids that by truncating in place instead of
+# restarting the follower; only the died-and-restarted path below pays it, once, and there the
+# duplicate is the wanted behaviour anyway (it recovers the records missed while nothing was
+# reading).
 start_kmsg() {
 	cat /dev/kmsg >> "$KERN" 2>/dev/null &
 	KPID=$!
@@ -69,6 +98,27 @@ mirror_logs() {
 	for f in /var/log/*.log; do
 		[ -f "$f" ] && cp "$f" "$SDIR/" 2>/dev/null
 	done
+}
+
+# /var/log is an 8 MiB tmpfs and the service logs append to it for the whole session, so a long or
+# chatty run fills it: every daemon's logging then stops mid-session, with nothing in the logs to
+# say why. Reclaim the largest one instead. mirror_logs has already copied the current contents to
+# the session dir on this same tick, so nothing is lost that is not already on the card, and the
+# marker line makes the gap explicit to whoever reads the truncated file later.
+VARLOG_FULL_PCT=90
+
+reclaim_var_log() {
+	use=$(df /var/log 2>/dev/null | awk 'NR == 2 { sub(/%/, "", $5); print $5 }')
+	case "${use:-}" in
+		''|*[!0-9]*) return ;;
+	esac
+	[ "$use" -ge "$VARLOG_FULL_PCT" ] || return
+
+	# shellcheck disable=SC2012  # busybox find has no -printf, and these names never contain newlines
+	big=$(ls -S /var/log/*.log 2>/dev/null | head -1)
+	[ -n "$big" ] || return
+	: > "$big"
+	echo "--- ml-logd: /var/log was ${use}% full, truncated here; earlier contents are in $SDIR ---" >> "$big"
 }
 
 cleanup() {
@@ -154,6 +204,7 @@ while : ; do
 	sample_threads "$up"
 
 	mirror_logs
+	reclaim_var_log
 
 	# Restart the kmsg follower if it died (heavy spew can EPIPE a slow reader).
 	if [ -n "$KPID" ] && ! kill -0 "$KPID" 2>/dev/null; then
@@ -161,11 +212,15 @@ while : ; do
 	fi
 
 	# Cap kernel.log: rotate one generation on overflow (rare; a crash loop is the only path).
+	# Copy-then-truncate rather than mv-then-restart, because a restarted follower re-opens
+	# /dev/kmsg at the oldest record and dumps the whole ring into the new file. During the crash
+	# spew that triggers a rotation, that dumped ring is itself most of the next 4 MB, so the
+	# rotation feeds itself. Truncating leaves the running follower's append offset at 0 and no
+	# record is read twice. The lines written between the copy and the truncate are the cost.
 	sz=$(stat -c %s "$KERN" 2>/dev/null || echo 0)
 	if [ "$sz" -gt "$KMSG_CAP" ] 2>/dev/null; then
-		[ -n "$KPID" ] && kill "$KPID" 2>/dev/null
-		mv -f "$KERN" "$KERN.1" 2>/dev/null
-		start_kmsg
+		cp "$KERN" "$KERN.1" 2>/dev/null
+		: > "$KERN"
 	fi
 
 	sleep "$SAMPLE"
