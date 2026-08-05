@@ -407,6 +407,14 @@ else
   log "video: $LINKD_BIN absent (build with make -C userspace linkd); skipping"
 fi
 
+MSP_ECHO_BIN="$US/build/ml-msp-echo"
+if [ "$DEV" = "betafpv-vr04-air" ] && [ -f "$MSP_ECHO_BIN" ]; then
+  mkdir -p "$STAGE/usr/local/bin"
+  install -m 0755 "$MSP_ECHO_BIN" "$STAGE/usr/local/bin/ml-msp-echo"
+  "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/ml-msp-echo" 2>/dev/null || true
+  log "video: staged ml-msp-echo -> /usr/local/bin/"
+fi
+
 # ml-rf-bringup: the AR8030 RF link bring-up at boot (ml-video service) - reset release, SDIO
 # re-probe, baseband firmware download, sdio0 config (absorbs the old gpio_pulse). Essential: with
 # no RF bring-up there is no video, so a missing binary is a HARD build error, not a silent skip.

@@ -1,13 +1,13 @@
 #!/sbin/openrc-run
-# Air-unit RF link at boot: run ml-linkd in air (TX) role, which transmits battery-voltage and
-# SoC-temperature telemetry to the goggle over sdio0. Association is chip-autonomous from the
-# artosyn_sdio insmod config, so no daemon is needed to associate. Best-effort: a missing binary
-# logs a warning and boot continues.
+# Air-unit RF link at boot: run ml-linkd in air (TX) role, which transmits telemetry and
+# MSP DisplayPort OSD from the FC UART to the goggle over sdio0. Association is chip-autonomous
+# from the artosyn_sdio insmod config. Best-effort: a missing binary logs a warning and boot
+# continues.
 #
 # RF is brought up (ml-rf-bringup) when the air baseband firmware is present in /lib/firmware;
 # otherwise this logs a warning and starts ml-linkd, which waits for sdio0 (retrying the bind and
 # the IIO resolve every tick).
-description="Air-unit RF link: telemetry TX (ml-linkd --role air)"
+description="Air-unit RF link: telemetry/MSP TX (ml-linkd --role air)"
 
 RF_BRINGUP=/usr/local/bin/ml-rf-bringup
 RF_FW=bb_demo_air_d.img
