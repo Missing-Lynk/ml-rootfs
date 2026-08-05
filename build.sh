@@ -254,6 +254,29 @@ else
   log "codec firmware: $CODEC_FW absent; wave5 codec will need it installed on the rootfs"
 fi
 
+# ISP tuning blob: ar-isp request_firmware()s artosyn/nt99235-tuning-preview-fpv.bin and generates
+# its gamma and DRC pages from it. Air unit only (the goggle has no camera). The vendor spells the
+# file with underscores and keeps it under usrdata/tunning; the driver asks for hyphens, so the
+# name changes here.
+#
+# A missing blob is a HARD build error rather than a silent skip. ar-isp only warns and runs
+# unconfigured, and an unconfigured ISP produces horizontal-streak garbage that still encodes,
+# transmits and decodes with every counter reading healthy - so the failure is invisible
+# everywhere downstream and would be found by looking at the picture, one battery later.
+if [ "$DEV" = "betafpv-vr04-air" ]; then
+  ISP_TUNING="$VENDOR_BLOBS/usr/usrdata/tunning/nt99235_tuning_preview_fpv.bin"
+  ISP_TUNING_SIZE=879704          # 0xd6c58, ar-isp-regs.h AR_ISP_TUNING_SIZE; ar-isp rejects any other
+  if [ ! -f "$ISP_TUNING" ]; then
+    die "ISP tuning: $ISP_TUNING absent - the ISP would run unconfigured and the picture would be garbage with no error anywhere; fetch it with glue/fetch/fetch-vendor-blobs.sh"
+  fi
+  if [ "$(stat -c %s "$ISP_TUNING")" != "$ISP_TUNING_SIZE" ]; then
+    die "ISP tuning: $ISP_TUNING is $(stat -c %s "$ISP_TUNING") bytes, expected $ISP_TUNING_SIZE - ar-isp would reject it and run unconfigured"
+  fi
+  mkdir -p "$STAGE/lib/firmware/artosyn"
+  cp "$ISP_TUNING" "$STAGE/lib/firmware/artosyn/nt99235-tuning-preview-fpv.bin"
+  log "ISP tuning: staged nt99235_tuning_preview_fpv.bin -> /lib/firmware/artosyn/nt99235-tuning-preview-fpv.bin"
+fi
+
 # RF baseband firmware: the open artosyn_sdio driver request_firmware()s the AR8030
 # baseband image + its merged config (insmod fw_name=/cfg_name=), which the ROM loader
 # then uploads to the chip. Unlike the vendor's full /lib/firmware, ours has room, so bake

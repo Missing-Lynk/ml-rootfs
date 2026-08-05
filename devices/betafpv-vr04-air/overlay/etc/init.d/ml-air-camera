@@ -1,0 +1,95 @@
+#!/sbin/openrc-run
+# Air-unit camera video at boot: drive the ar-cvisp capture node into both wave5 encoders and send
+# the two H.265 tiles to the goggle on 10.0.0.1:10001. Runs after ml-air-link, which owns the RF
+# bring-up; ml-air-video retries its sends until sdio0 exists, so a slow link only delays picture.
+#
+# The chain ahead of CVISP needs nothing driving it: ar-cvisp defaults to chain=1 and brings the
+# sensor, VIF and ISP up from STREAMON, and depth=3 is already its default. This service therefore
+# starts one process and nothing else.
+#
+# ONE ENCODER INSTANCE PAIR PER BOOT. wave5 encoder state survives DESTROY_INSTANCE, so a second
+# pair in the same boot misbehaves. That makes this service and a hand-run glue/camera script
+# mutually exclusive: stop this one first (`rc-service ml-air-camera stop`) to free the pair for a
+# measurement run, which is why the autostart is a service rather than something inlined at boot.
+description="Air-unit camera video: ar-cvisp -> two H.265 tiles -> goggle :10001"
+
+AIR_VIDEO=/usr/local/bin/ml-air-video
+PIDFILE=/run/ml-air-camera.pid
+LOG=/var/log/ml-air-camera.log
+
+# ar-isp generates its gamma and DRC pages from this blob (rootfs build stages it). Without it the
+# ISP runs unconfigured and every frame is horizontal-streak garbage that still encodes, transmits
+# and decodes with every counter healthy, so nothing downstream reports a fault.
+TUNING=/lib/firmware/artosyn/nt99235-tuning-preview-fpv.bin
+
+# Matches the validated 60 fps camera-to-goggle run. The encoder knobs (5 Mbit/s per tile, CBR,
+# gop 0, qp 0..51, i-frame qp 30, mb rc on) are ml-air-video's own defaults on this path and are
+# left there rather than restated, so the two cannot drift apart.
+FPS=60
+BUFS=8          # capture buffers; 8 needs the 26 MiB cvisp-cma, at 17 MiB REQBUFS caps at 5
+INFLIGHT=3      # capture buffers the encoders may hold at once
+
+# Seconds to wait for the capture node. The camera modules coldplug from their DT nodes, which
+# races this service rather than ordering before it.
+NODE_WAIT=10
+
+depend() {
+	after modules mdev hwdrivers ml-air-link
+}
+
+# The ar-cvisp node index is whatever probe order gives it, so find it by driver name. wave5 also
+# registers video nodes, and picking by index would eventually hand the encoder node to the camera.
+find_node() {
+	for p in /sys/class/video4linux/video*
+	do
+		[ "$(cat "$p/name" 2>/dev/null)" = ar-cvisp ] || continue
+		echo "/dev/${p##*/}"
+		return 0
+	done
+	return 1
+}
+
+start() {
+	ebegin "Starting air-unit camera video"
+
+	if [ ! -x "$AIR_VIDEO" ]; then
+		ewarn "ml-air-camera: $AIR_VIDEO missing"
+		eend 0
+		return 0
+	fi
+
+	# wave5 has a DT node and normally coldplugs; load it defensively in case it did not.
+	modprobe wave5 2>/dev/null
+
+	[ -f "$TUNING" ] ||
+		ewarn "ml-air-camera: $TUNING missing - the ISP will run unconfigured and the picture will be garbage with no error anywhere"
+
+	i=0
+	while [ "$i" -lt "$NODE_WAIT" ]
+	do
+		NODE=$(find_node) && break
+		i=$((i + 1))
+		sleep 1
+	done
+
+	if [ -z "${NODE:-}" ]; then
+		ewarn "ml-air-camera: no ar-cvisp node after ${NODE_WAIT}s - camera modules did not load"
+		eend 0
+		return 0
+	fi
+
+	einfo "ml-air-camera: capture node $NODE at $FPS fps"
+
+	ML_AIR_CAMERA="$NODE" ML_AIR_FPS="$FPS" ML_AIR_BUFS="$BUFS" ML_AIR_INFLIGHT="$INFLIGHT" \
+	start-stop-daemon --start --background --make-pidfile \
+		--pidfile "$PIDFILE" --exec "$AIR_VIDEO" \
+		--stdout "$LOG" --stderr "$LOG"
+
+	eend 0
+}
+
+stop() {
+	ebegin "Stopping air-unit camera video (frees this boot's encoder instance pair)"
+	start-stop-daemon --stop --pidfile "$PIDFILE" 2>/dev/null
+	eend 0
+}
