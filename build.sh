@@ -388,12 +388,21 @@ fi
 # gst-full mechanism as ml-pipeline, videotestsrc -> two H.265 tiles -> :10001). Air unit only.
 if [ "$DEV" = "betafpv-vr04-air" ]; then
   AIR_VIDEO_BIN="$US/gstreamer/build/static/ml-air-video"
+  AIR_CTL_BIN="$US/gstreamer/build/bin/ml-air-ctl"
   if [ -f "$AIR_VIDEO_BIN" ]; then
     mkdir -p "$STAGE/usr/local/bin"
     install -m 0755 "$AIR_VIDEO_BIN" "$STAGE/usr/local/bin/ml-air-video"
     log "video: staged ml-air-video (standalone static) -> /usr/local/bin/"
   else
     log "video: $AIR_VIDEO_BIN absent (build with userspace/gstreamer/scripts/build-static.sh); skipping"
+  fi
+
+  if [ -f "$AIR_CTL_BIN" ]; then
+    mkdir -p "$STAGE/usr/local/bin"
+    install -m 0755 "$AIR_CTL_BIN" "$STAGE/usr/local/bin/ml-air-ctl"
+    log "video: staged ml-air-ctl -> /usr/local/bin/"
+  else
+    log "video: $AIR_CTL_BIN absent (build with make -C userspace gst); skipping"
   fi
 fi
 
@@ -597,6 +606,7 @@ echo
 echo "=================================================================="
 echo " Alpine $ALPINE_VER aarch64 rootfs for the open kernel ($HOSTNAME, flavor=$FLAVOR)"
 echo "=================================================================="
+
 # Fail on overflow up front; the stats themselves print LAST so they don't scroll away
 # behind the package list.
 if [ "$UBI_BYTES" -ge "$LIMIT" ]; then
