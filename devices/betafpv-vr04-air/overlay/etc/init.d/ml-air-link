@@ -24,7 +24,10 @@ start() {
 	if [ -x "$RF_BRINGUP" ] && [ -f "/lib/firmware/$RF_FW" ] && [ -f "/lib/firmware/$RF_CFG" ]; then
 		# The air side of the sdio0 link is 10.0.0.100 (ml-rf-bringup defaults to the
 		# ground address 10.0.0.1).
-		ML_RF_SDIO_ADDR=10.0.0.100 "$RF_BRINGUP" "$RF_FW" "$RF_CFG" \
+		# Bounded, because this runs in the foreground of the default runlevel: a bring-up that
+		# wedges rather than fails would otherwise stall the rest of boot on a device with no
+		# panel to show it. A timeout exits non-zero, so the warning below covers a hang too.
+		ML_RF_SDIO_ADDR=10.0.0.100 timeout 30 "$RF_BRINGUP" "$RF_FW" "$RF_CFG" \
 			|| ewarn "ml-air-link: RF bring-up incomplete"
 	else
 		ewarn "ml-air-link: air baseband firmware not baked; bring RF up out of band"

@@ -99,7 +99,7 @@ COMMUNITY_REPO="$ALPINE_CDN/$ALPINE_BRANCH/community"
 # aarch64 minirootfs: used only as the source of the verified Alpine signing keys (the
 # same RSA keys sign every arch); the rootfs itself is built fresh below with apk.static.
 MINIROOTFS="alpine-minirootfs-${ALPINE_VER}-aarch64.tar.gz"
-MINIROOTFS_URL="$ALPINE_CDN/latest-stable/releases/aarch64/$MINIROOTFS"
+MINIROOTFS_URL="$ALPINE_CDN/$ALPINE_BRANCH/releases/aarch64/$MINIROOTFS"
 
 # apk-tools-static for the BUILD host (run here with --arch aarch64).
 HOST_ARCH="$(uname -m)"
@@ -109,7 +109,7 @@ APK_STATIC_URL="$MAIN_REPO/$HOST_ARCH/$APK_STATIC_PKG"
 # Everything per-device lives in devices/<name>/: board.conf (target identity/addressing + NAND
 # geometry) and overlay/ (the device-specific OpenRC services + modules-load, layered on the
 # shared skeleton/ below). Arg 1 = the device name (required, no default). Same names as the root
-# Makefile DEVICE and kernel/devices/<name>/. See plans/device-hal.md.
+# Makefile DEVICE and kernel/devices/<name>/.
 DEV="${1:-}"
 [ -n "$DEV" ] || die "no device given (arg 1); pass a device name, e.g. betafpv-vr04-goggle"
 DEVICE_DIR="$HERE/devices/$DEV"
@@ -229,8 +229,15 @@ UBINIZE="$(find_tool ubinize || true)"
 
 fetch() {  # url outfile [sha256]
   local url="$1" out="$2" sha="${3:-}"
-  if [ -f "$out" ] && [ -n "$sha" ] && echo "$sha  $out" | sha256sum -c - >/dev/null 2>&1; then
-    return
+  # A cached file is reused when its checksum matches, and unconditionally when no checksum is
+  # pinned for this host arch - re-fetching a file nothing can verify gains nothing.
+  if [ -f "$out" ]; then
+    if [ -z "$sha" ]; then
+      return
+    fi
+    if echo "$sha  $out" | sha256sum -c - >/dev/null 2>&1; then
+      return
+    fi
   fi
 
   log "fetch $(basename "$out")"
@@ -535,7 +542,9 @@ cat > "$STAGE/etc/hosts" <<EOF
 ::1         localhost localhost.localdomain $HOSTNAME
 EOF
 
-# apk repositories so `apk add` works once host NAT is up.
+# apk repositories so `apk add` works once host NAT is up. latest-stable rather than the pinned
+# $ALPINE_BRANCH on purpose: the build inputs are pinned for reproducibility, but a running image
+# should still reach a repo that exists after Alpine promotes the next release.
 cat > "$STAGE/etc/apk/repositories" <<EOF
 $ALPINE_CDN/latest-stable/main
 $ALPINE_CDN/latest-stable/community
