@@ -121,6 +121,44 @@ log "device: $DEV ($DEVICE_CONF)"
 # shellcheck source=/dev/null
 . "$DEVICE_CONF"
 
+# Fail early on an incomplete or malformed profile rather than midway through the build. Every
+# value below is read unguarded from here on, so this is what makes that safe.
+for v in HOSTNAME ROOT_PASS GADGET_IP GADGET_CIDR HOST_GW DEV_MAC HOST_MAC USB_PRODUCT HAS_SD \
+         HAS_DISPLAY RF_ROLE PARTITION PARTITION_PEBS PEB_SIZE MIN_IO SUBPAGE LEB_SIZE \
+         MAX_LEB_COUNT; do
+  [ -n "${!v:-}" ] || die "device config $DEVICE_CONF: missing $v"
+done
+
+# Capability flags gate whole payloads, so anything but 0/1 - "yes", "true", a typo - would read
+# as "this board has no panel" and silently ship an image missing its display stack.
+for v in HAS_SD HAS_DISPLAY; do
+  case "${!v}" in
+    0|1)
+      ;;
+    *)
+      die "device config $DEVICE_CONF: $v='${!v}' (0|1)"
+      ;;
+  esac
+done
+
+# The role branches are per-role with no fallback, so an unrecognised value would produce an
+# image with no baseband firmware and no role binaries.
+case "$RF_ROLE" in
+  air|ground)
+    ;;
+  *)
+    die "device config $DEVICE_CONF: RF_ROLE='$RF_ROLE' (air|ground)"
+    ;;
+esac
+
+# The tuning blob's device-side name and size are only meaningful together with the source path.
+if [ -n "${ISP_TUNING:-}" ]; then
+  for v in ISP_TUNING_NAME ISP_TUNING_SIZE; do
+    [ -n "${!v:-}" ] || die "device config $DEVICE_CONF: ISP_TUNING set but $v missing"
+  done
+fi
+
+
 # Whitelisted kernel modules (built by kernel/modules/build.sh, which already stages
 # only the modules we ship - Artosyn out-of-tree + the in-tree DRM stack - with depmod
 # already run). They are placed at /lib/modules/$KVER/ and NOT auto-loaded (no
@@ -132,7 +170,9 @@ log "device: $DEV ($DEVICE_CONF)"
 # empty rather than rooted at /, which would otherwise resolve to the HOST's /lib/modules.
 source "$HERE/../kernel/scripts/pin.env" 2>/dev/null || true
 KERNEL_BUILD_DIR="${BUILD_DIR:-${KERNEL_BUILD_DEFAULT:-}}"
-MODULES_STAGE="${MODULES_STAGE:-${KERNEL_BUILD_DIR:+$KERNEL_BUILD_DIR/ml-modules/rootfs}}"
+# "-" not ":-": an explicitly empty MODULES_STAGE= disables module staging, which ":-" would
+# quietly turn back into the default.
+MODULES_STAGE="${MODULES_STAGE-${KERNEL_BUILD_DIR:+$KERNEL_BUILD_DIR/ml-modules/rootfs}}"
 if [ -n "$MODULES_STAGE" ] && [ -d "$MODULES_STAGE/lib/modules" ]; then
   log "kernel modules: staging from $MODULES_STAGE"
   # Guard against shipping a display device an incomplete module stage: a stage that was left
@@ -141,22 +181,18 @@ if [ -n "$MODULES_STAGE" ] && [ -d "$MODULES_STAGE/lib/modules" ]; then
   # present AND this device has a panel; a deliberately module-less build still logs and skips
   # above. `make kernel` also asserts this stage-side (kernel/modules/stage.sh), so this is the
   # belt-and-braces net for the case where rootfs is rebuilt against a pre-existing bad stage.
-  if [ "${HAS_DISPLAY:-0}" = 1 ]; then
+  if [ "$HAS_DISPLAY" = 1 ]; then
     for ko in artosyn_vo.ko drm.ko; do
       find "$MODULES_STAGE/lib/modules" -name "$ko" | grep -q . \
         || die "kernel modules: HAS_DISPLAY=1 but $ko missing from $MODULES_STAGE (stale/incomplete stage; rebuild with 'make kernel')"
     done
   fi
+elif [ -z "$MODULES_STAGE" ]; then
+  log "kernel modules: staging disabled (MODULES_STAGE empty); building a module-less image"
 else
-  log "kernel modules: none staged at ${MODULES_STAGE:-<no kernel build dir>} (build with kernel/modules/build.sh); skipping"
+  log "kernel modules: nothing at $MODULES_STAGE (build with kernel/modules/build.sh); skipping"
   MODULES_STAGE=""
 fi
-
-# Fail early on an incomplete profile rather than midway through the build.
-for v in HOSTNAME ROOT_PASS GADGET_IP GADGET_CIDR HOST_GW DEV_MAC HOST_MAC USB_PRODUCT HAS_SD \
-         HAS_DISPLAY PARTITION PARTITION_PEBS PEB_SIZE MIN_IO SUBPAGE LEB_SIZE MAX_LEB_COUNT; do
-  [ -n "${!v:-}" ] || die "device config $DEVICE_CONF: missing $v"
-done
 
 # ======================================================================================
 # Host tooling: verify what must be installed, then fetch the pinned build inputs
@@ -165,8 +201,10 @@ done
 command -v fakeroot >/dev/null || die "fakeroot not found"
 command -v openssl  >/dev/null || die "openssl not found"
 command -v curl     >/dev/null || die "curl not found"
+
 # make-rootfs.sh lists the aarch64 busybox's applets through user-mode qemu.
 command -v qemu-aarch64-static >/dev/null || die "qemu-aarch64-static not found - install qemu-user-static"
+
 # mkfs.ubifs + ubinize are deliberately NOT auto-fetched: host tools come from your OS
 # package manager; the build only downloads its pinned build inputs (apk.static, keys).
 # Debian installs them into /usr/sbin, which is not on a regular user's PATH (they run
@@ -183,6 +221,7 @@ find_tool() {  # name -> full path, searching PATH then the sbin dirs
 
   return 1
 }
+
 MKFS_UBIFS="$(find_tool mkfs.ubifs || true)"
 UBINIZE="$(find_tool ubinize || true)"
 [ -n "$MKFS_UBIFS" ] || die "mkfs.ubifs not found - install mtd-utils with your OS package manager"
@@ -236,80 +275,137 @@ cp -a "$SKEL/." "$STAGE/"
 [ -d "$DEVICE_OVERLAY" ] && cp -a "$DEVICE_OVERLAY/." "$STAGE/"
 mkdir -p "$STAGE/etc/apk"
 
-# The proprietary vendor blobs the open stack needs live under firmware/bin/slot-a/
-# (git-ignored; repopulate from your own goggle with glue/fetch/fetch-vendor-blobs.sh).
-# Each block below stages what is present and skips silently otherwise, so the image
-# still builds on a fresh clone - it just lacks that firmware until the blobs are fetched.
+# ======================================================================================
+# Staging helpers
+#
+#   stage     SRC DST [--tag T] [--hint H | --see S] [--mode M] [--strip]
+#   stage_req SRC DST [--tag T] [--hint H | --see S] [--mode M] [--strip] [--why W]
+#
+# stage installs SRC if a sibling repo built it and says where to get it otherwise, so a fresh
+# clone still produces an image. stage_req dies instead; --why states what breaks on the
+# device. DST is relative to the image root, no leading slash. --tag prefixes the log line.
+#
+# --hint is the command that builds SRC; --see points at an asset that is committed rather
+# than built, where "build with" would be wrong.
+#
+# Gated-off artifacts are silent: a log line is only worth printing when a feature this
+# device HAS is missing its artifact.
+# ======================================================================================
+_stage() {
+  local required="$1" src="$2" dst="$3"
+  shift 3
+  local tag="stage" hint="" why="" mode=0755 strip=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --tag)
+        tag="$2"
+        shift 2
+        ;;
+      --hint)
+        hint="build with $2"
+        shift 2
+        ;;
+      --see)
+        hint="see $2"
+        shift 2
+        ;;
+      --why)
+        why="$2"
+        shift 2
+        ;;
+      --mode)
+        mode="$2"
+        shift 2
+        ;;
+      --strip)
+        strip=1
+        shift
+        ;;
+      *)
+        die "_stage: unknown option '$1' (staging $src)"
+        ;;
+    esac
+  done
+
+  if [ ! -f "$src" ]; then
+    if [ "$required" = 1 ]; then
+      die "$tag: $src absent${why:+ - $why}${hint:+; $hint}"
+    fi
+
+    log "$tag: $src absent${hint:+ ($hint)}; skipping"
+    return 0
+  fi
+
+  mkdir -p "$STAGE/$(dirname "$dst")"
+  install -m "$mode" "$src" "$STAGE/$dst"
+  if [ "$strip" = 1 ]; then
+    "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/$dst" 2>/dev/null || true
+  fi
+
+  log "$tag: staged $(basename "$src") -> /$dst"
+}
+
+stage() {
+  _stage 0 "$@"
+}
+
+stage_req() {
+  _stage 1 "$@"
+}
+
+# Proprietary vendor blobs, populate with glue/fetch/fetch-vendor-blobs.sh.
 VENDOR_BLOBS="$HERE/../firmware/bin/slot-a"
 
-# Codec firmware: the wave5 driver (wave5.ko) request_firmware()s cnm/wave521c_k3_codec_fw.bin
-# once loaded. chagall.bin is the proprietary Wave521C VCPU ucode. Install it into the
-# overlay if present; the codec module just won't probe until it is provided.
-CODEC_FW="$VENDOR_BLOBS/usr/bin/chagall.bin"
-if [ -f "$CODEC_FW" ]; then
-  mkdir -p "$STAGE/lib/firmware/cnm"
-  cp "$CODEC_FW" "$STAGE/lib/firmware/cnm/wave521c_k3_codec_fw.bin"
-  log "codec firmware: staged chagall.bin -> /lib/firmware/cnm/wave521c_k3_codec_fw.bin"
-else
-  log "codec firmware: $CODEC_FW absent; wave5 codec will need it installed on the rootfs"
+# Wave521C VCPU ucode, request_firmware()d by wave5.ko under the name it asks for.
+stage "$VENDOR_BLOBS/usr/bin/chagall.bin" lib/firmware/cnm/wave521c_k3_codec_fw.bin \
+  --tag "codec firmware" --mode 0644 --hint "glue/fetch/fetch-vendor-blobs.sh"
+
+# ISP tuning blob, request_firmware()d by ar-isp. Which file, what the driver calls it and how
+# big it must be are sensor-specific and declared in the device profile; a board that declares
+# none stages none. Absent or wrong-sized is fatal rather than a skip.
+if [ -n "${ISP_TUNING:-}" ]; then
+  ISP_TUNING_SRC="$VENDOR_BLOBS/$ISP_TUNING"
+  if [ ! -f "$ISP_TUNING_SRC" ]; then
+    die "ISP tuning: $ISP_TUNING_SRC absent - the ISP would run unconfigured and the picture would be garbage with no error anywhere; fetch it with glue/fetch/fetch-vendor-blobs.sh"
+  fi
+
+  if [ "$(stat -c %s "$ISP_TUNING_SRC")" != "$ISP_TUNING_SIZE" ]; then
+    die "ISP tuning: $ISP_TUNING_SRC is $(stat -c %s "$ISP_TUNING_SRC") bytes, expected $ISP_TUNING_SIZE - ar-isp would reject it and run unconfigured"
+  fi
+
+  stage "$ISP_TUNING_SRC" "lib/firmware/artosyn/$ISP_TUNING_NAME" \
+    --tag "ISP tuning" --mode 0644
 fi
 
-# ISP tuning blob: ar-isp request_firmware()s artosyn/nt99235-tuning-preview-fpv.bin and generates
-# its gamma and DRC pages from it. Air unit only (the goggle has no camera). The vendor spells the
-# file with underscores and keeps it under usrdata/tunning; the driver asks for hyphens, so the
-# name changes here.
+# AR8030 baseband image + merged config, request_firmware()d by artosyn_sdio (insmod
+# fw_name=/cfg_name=) and uploaded to the chip by the ROM loader. Baked in at the default search
+# path so a flashed image needs no host push; the reset + insmod sequence stays in ml-rf-bringup.
+# RF_ROLE picks the set, and each device carries only its own.
 #
-# A missing blob is a HARD build error rather than a silent skip. ar-isp only warns and runs
-# unconfigured, and an unconfigured ISP produces horizontal-streak garbage that still encodes,
-# transmits and decodes with every counter reading healthy - so the failure is invisible
-# everywhere downstream and would be found by looking at the picture, one battery later.
-if [ "$DEV" = "betafpv-vr04-air" ]; then
-  ISP_TUNING="$VENDOR_BLOBS/usr/usrdata/tunning/nt99235_tuning_preview_fpv.bin"
-  ISP_TUNING_SIZE=879704          # 0xd6c58, ar-isp-regs.h AR_ISP_TUNING_SIZE; ar-isp rejects any other
-  if [ ! -f "$ISP_TUNING" ]; then
-    die "ISP tuning: $ISP_TUNING absent - the ISP would run unconfigured and the picture would be garbage with no error anywhere; fetch it with glue/fetch/fetch-vendor-blobs.sh"
-  fi
-  if [ "$(stat -c %s "$ISP_TUNING")" != "$ISP_TUNING_SIZE" ]; then
-    die "ISP tuning: $ISP_TUNING is $(stat -c %s "$ISP_TUNING") bytes, expected $ISP_TUNING_SIZE - ar-isp would reject it and run unconfigured"
-  fi
-  mkdir -p "$STAGE/lib/firmware/artosyn"
-  cp "$ISP_TUNING" "$STAGE/lib/firmware/artosyn/nt99235-tuning-preview-fpv.bin"
-  log "ISP tuning: staged nt99235_tuning_preview_fpv.bin -> /lib/firmware/artosyn/nt99235-tuning-preview-fpv.bin"
-fi
-
-# RF baseband firmware: the open artosyn_sdio driver request_firmware()s the AR8030
-# baseband image + its merged config (insmod fw_name=/cfg_name=), which the ROM loader
-# then uploads to the chip. Unlike the vendor's full /lib/firmware, ours has room, so bake
-# both blobs in at request_firmware's default search path - then a flashed image needs no
-# host push or firmware_class path override to bring RF up. The device reset + insmod
-# sequence itself stays in glue/dev/rf-bringup.sh (bring-up is never baked into the image).
-# Selected by the device's RF_ROLE (board.conf): "air" bakes the air TX firmware, anything else
-# (default "ground") bakes the goggle/RX firmware. Keeps each device's own blob without the other.
-if [ "${RF_ROLE:-ground}" = "air" ]; then
-  # Air (TX): the air baseband image + its minified stock-merge config. ml-air-link brings RF up at
-  # boot from these; the config's channel set is already baked, so there is no race/normal split.
+# Paired: the driver needs image and config together, so half a set stages as none.
+if [ "$RF_ROLE" = "air" ]; then
   RF_FW="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_demo_air_d.img"
   RF_CFG="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_config_air.json"
   if [ -f "$RF_FW" ] && [ -f "$RF_CFG" ]; then
-    mkdir -p "$STAGE/lib/firmware"
-    cp "$RF_FW"  "$STAGE/lib/firmware/bb_demo_air_d.img"
-    cp "$RF_CFG" "$STAGE/lib/firmware/bb_config_air.json"
-    log "RF firmware: staged bb_demo_air_d.img + bb_config_air.json -> /lib/firmware/ (air role)"
+    stage "$RF_FW"  lib/firmware/bb_demo_air_d.img  --tag "RF firmware" --mode 0644
+    stage "$RF_CFG" lib/firmware/bb_config_air.json --tag "RF firmware" --mode 0644
   else
     log "RF firmware: $RF_FW / $RF_CFG absent; air RF bring-up will need them pushed at runtime"
   fi
-else
+fi
+
+if [ "$RF_ROLE" = "ground" ]; then
   RF_FW="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_demo_gnd_d.img"
   RF_CFG="$VENDOR_BLOBS/tmp/ar813x/bb_config_gnd.json.usr_cfg.json"
   if [ -f "$RF_FW" ] && [ -f "$RF_CFG" ]; then
-    mkdir -p "$STAGE/lib/firmware"
-    cp "$RF_FW"  "$STAGE/lib/firmware/bb_demo_gnd_d.img"
-    cp "$RF_CFG" "$STAGE/lib/firmware/bb_config_gnd.json.usr_cfg.json"
+    stage "$RF_FW"  lib/firmware/bb_demo_gnd_d.img               --tag "RF firmware" --mode 0644
+    stage "$RF_CFG" lib/firmware/bb_config_gnd.json.usr_cfg.json --tag "RF firmware" --mode 0644
 
-    # The Normal/Race band is the config's chan_valid_bmp, which only enters the chip at firmware
-    # upload, so each band is a whole config blob and switching one costs a boot. The captured blob
-    # is a race-mode one (0x0007FFF8 = table indices 3..18); derive the normal variant (0x00000007 =
-    # 5758/5788/5828) by rewriting that one field. ml-video picks between the two at boot.
+    # Band = chan_valid_bmp, which only enters the chip at firmware upload, so each band is a
+    # whole blob and switching costs a boot. The captured config is race (0x0007FFF8, table
+    # indices 3..18); rewrite that one field for normal (0x00000007 = 5758/5788/5828). ml-video
+    # picks between them at boot. The grep is load-bearing: an unrewritten copy is a race blob
+    # shipped as the normal band.
     sed 's/"chan_valid_bmp":\([[:space:]]*\)"0x0007FFF8"/"chan_valid_bmp":\1"0x00000007"/I' \
         "$RF_CFG" > "$STAGE/lib/firmware/bb_config_gnd.json.normal_cfg.json"
     if ! grep -qi '"chan_valid_bmp":[[:space:]]*"0x00000007"' \
@@ -317,208 +413,119 @@ else
       die "RF firmware: chan_valid_bmp not rewritten in $RF_CFG - normal-band config would be a race blob"
     fi
 
-    log "RF firmware: staged bb_demo_gnd_d.img + race/normal configs -> /lib/firmware/"
+    log "RF firmware: staged normal-band config -> /lib/firmware/"
   else
     log "RF firmware: $RF_FW / $RF_CFG absent; RF bring-up will push them at runtime (glue/dev/rf-bringup.sh -> /run/ml/fw)"
   fi
 fi
 
-# Display bring-up (the ml-display boot service, in the goggle device overlay): the
-# static ml-drmfd DRM-master broker + ml-splash (both built by userspace/gstreamer/src/build.sh)
-# and the splash asset (userspace/assets/splash/splash.yuv). Binaries staged if present; the
-# service warns and skips at boot otherwise.
-DISPLAY_BIN="$US/gstreamer/build/bin"
-for b in ml-drmfd ml-splash; do
-  if [ -f "$DISPLAY_BIN/$b" ]; then
-    mkdir -p "$STAGE/usr/local/bin"
-    install -m 0755 "$DISPLAY_BIN/$b" "$STAGE/usr/local/bin/$b"
-    log "display: staged $b -> /usr/local/bin/"
-  else
-    log "display: $DISPLAY_BIN/$b absent (build with userspace/gstreamer/src/build.sh); skipping"
-  fi
-done
-SPLASH="$US/assets/splash/splash.yuv"
-if [ -f "$SPLASH" ]; then
-  mkdir -p "$STAGE/usr/local/share"
-  install -m 0644 "$SPLASH" "$STAGE/usr/local/share/nosignal.yuv"
-  log "display: staged splash.yuv -> /usr/local/share/nosignal.yuv"
-else
-  log "display: $SPLASH absent (ships in userspace/assets/splash); skipping (boot splash will be blank)"
-fi
+# --------------------------------------------------------------------------------------
+# Binaries. Every device gets these.
+# --------------------------------------------------------------------------------------
 
-# HUD (ml-hud service): the static menu+OSD binary, its BTFL glyph font, and the i18n catalogs,
-# staged to /usr/local/{bin,share}. Skipped if ml-hud/build/hud is absent.
-HUD_BIN="$US/ml-hud/build/hud"
-if [ -f "$HUD_BIN" ]; then
-  mkdir -p "$STAGE/usr/local/bin" "$STAGE/usr/local/share/hud/lang"
-  install -m 0755 "$HUD_BIN" "$STAGE/usr/local/bin/ml-hud"
-  "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/ml-hud" 2>/dev/null || true
-  BTFL_FONT="$US/assets/osd-fonts/font_BTFL_hd.png"
-  if [ -f "$BTFL_FONT" ]; then
-    install -m 0644 "$BTFL_FONT" "$STAGE/usr/local/share/hud/font_BTFL_hd.png"
-  else
-    log "hud: $BTFL_FONT absent (generate with userspace/assets/osd-fonts/mcm2png.py); skipping font"
-  fi
+stage "$US/build/ml-linkd" usr/local/bin/ml-linkd \
+  --tag video --strip --hint "make -C userspace linkd"
 
-  install -m 0644 "$US"/ml-hud/lang/*.lang "$STAGE/usr/local/share/hud/lang/"
-  log "hud: staged ml-hud + lang -> /usr/local/{bin,share}/"
-else
-  log "hud: $HUD_BIN absent (build with userspace/ml-hud/tools/deploy.sh); skipping"
-fi
+# AR8030 bring-up at boot: reset release, SDIO re-probe, firmware download, sdio0 config.
+# Required - without it there is no RF and so no video on any device.
+stage_req "$US/build/ml-rf-bringup" usr/local/bin/ml-rf-bringup \
+  --tag video --strip --hint "make -C userspace rf-bringup" \
+  --why "RF bring-up is essential, there is no video without it"
 
-# Video (production track): the standalone fully-static ml-pipeline
-# (userspace/gstreamer/scripts/build-static.sh - whole GStreamer + the curated plugin set baked in, no /mnt/gst, no
-# plugin registry) plus the static RF daemon ml-linkd. With ml-drmfd + ml-hud (above) and the kernel
-# modules + codec fw (already in this rootfs), RF video runs with NO SD card. The SD squashfs
-# (userspace/gstreamer/scripts/deploy.sh) stays the development track. Both optional; skipped if not built.
-# ml-pipeline is the decode/display binary; the display-less air unit never runs it (no ml-video
-# service) and it is ~10 MiB on a tight partition, so stage it only on devices with a display.
-if [ "$DEV" != "betafpv-vr04-air" ]; then
-  PIPELINE_BIN="$US/gstreamer/build/static/ml-pipeline"
-  if [ -f "$PIPELINE_BIN" ]; then
-    mkdir -p "$STAGE/usr/local/bin"
-    install -m 0755 "$PIPELINE_BIN" "$STAGE/usr/local/bin/ml-pipeline"
-    log "video: staged ml-pipeline (standalone static) -> /usr/local/bin/"
-  else
-    log "video: $PIPELINE_BIN absent (build with userspace/gstreamer/scripts/build-static.sh); skipping"
-  fi
-fi
+# Marks a healthy boot in /usrdata/missinglynk/device.json; absent, the boot count is not kept.
+stage "$HERE/../native/build/ml-boot-record" usr/local/bin/ml-boot-record \
+  --tag identity --strip --hint "native/build.sh"
 
-# Air-unit synthetic video TX (production track): the standalone fully-static ml-air-video (same
-# gst-full mechanism as ml-pipeline, videotestsrc -> two H.265 tiles -> :10001). Air unit only.
-if [ "$DEV" = "betafpv-vr04-air" ]; then
-  AIR_VIDEO_BIN="$US/gstreamer/build/static/ml-air-video"
-  AIR_CTL_BIN="$US/gstreamer/build/bin/ml-air-ctl"
-  if [ -f "$AIR_VIDEO_BIN" ]; then
-    mkdir -p "$STAGE/usr/local/bin"
-    install -m 0755 "$AIR_VIDEO_BIN" "$STAGE/usr/local/bin/ml-air-video"
-    log "video: staged ml-air-video (standalone static) -> /usr/local/bin/"
-  else
-    log "video: $AIR_VIDEO_BIN absent (build with userspace/gstreamer/scripts/build-static.sh); skipping"
+# Single-lease DHCP on the USB gadget link, started by the usb-gadget service, so a phone or PC
+# running a DHCP client gets an address on the gadget /24. Absent, static-IP hosts still work.
+stage "$HERE/../native/build/minidhcpd-musl" usr/local/bin/minidhcpd \
+  --tag net --hint "native/build.sh"
+
+# Flips the gpt0 active bit for the slot switch, and is how ml-usrdata attaches usr_data.
+stage "$HERE/../native/build/mtdtool" usr/local/bin/mtdtool \
+  --tag slot-switch --strip --hint "native/build.sh"
+
+# --------------------------------------------------------------------------------------
+# Display payload: the panel-side stack, none of which a HAS_DISPLAY=0 board can start.
+# ml-pipeline is ~10 MiB and the splash 3 MB on an uncompressed UBIFS, so this is most of
+# what separates a goggle image from an air-unit one.
+# --------------------------------------------------------------------------------------
+if [ "$HAS_DISPLAY" = 1 ]; then
+  # ml-display service: DRM-master broker, splash painter, and the splash asset.
+  for b in ml-drmfd ml-splash; do
+    stage "$US/gstreamer/build/bin/$b" "usr/local/bin/$b" \
+      --tag display --hint "userspace/gstreamer/src/build.sh"
+  done
+
+  stage "$US/assets/splash/splash.yuv" usr/local/share/nosignal.yuv \
+    --tag display --mode 0644 --see "userspace/assets/splash"
+
+  # ml-hud service: menu + OSD on a DRM overlay plane, its glyph font and i18n catalogs.
+  HUD_BIN="$US/ml-hud/build/hud"
+  stage "$HUD_BIN" usr/local/bin/ml-hud \
+    --tag hud --strip --hint "userspace/ml-hud/tools/deploy.sh"
+  stage "$US/assets/osd-fonts/font_BTFL_hd.png" usr/local/share/hud/font_BTFL_hd.png \
+    --tag hud --mode 0644 --hint "userspace/assets/osd-fonts/mcm2png.py"
+
+  # A set, not an artifact: the catalogs ship with ml-hud and are never built separately.
+  if [ -f "$HUD_BIN" ]; then
+    mkdir -p "$STAGE/usr/local/share/hud/lang"
+    install -m 0644 "$US"/ml-hud/lang/*.lang "$STAGE/usr/local/share/hud/lang/"
+    log "hud: staged lang catalogs -> /usr/local/share/hud/lang/"
   fi
 
-  if [ -f "$AIR_CTL_BIN" ]; then
-    mkdir -p "$STAGE/usr/local/bin"
-    install -m 0755 "$AIR_CTL_BIN" "$STAGE/usr/local/bin/ml-air-ctl"
-    log "video: staged ml-air-ctl -> /usr/local/bin/"
-  else
-    log "video: $AIR_CTL_BIN absent (build with make -C userspace gst); skipping"
-  fi
+  # Standalone static decode/display binary: whole GStreamer + the curated plugin set baked
+  # in, no /mnt/gst, no plugin registry. The SD squashfs (gstreamer/scripts/deploy.sh) is the
+  # development track.
+  stage "$US/gstreamer/build/static/ml-pipeline" usr/local/bin/ml-pipeline \
+    --tag video --hint "userspace/gstreamer/scripts/build-static.sh"
+
+  # Watchdog reset so the SPL boots the active slot. Only the HUD's "Switch to Slot A" runs it.
+  stage "$HERE/../glue/build/wdt-reset" usr/local/bin/wdt-reset \
+    --tag slot-switch --strip --hint "make -C glue"
 fi
 
-LINKD_BIN="$US/build/ml-linkd"
-if [ -f "$LINKD_BIN" ]; then
-  mkdir -p "$STAGE/usr/local/bin"
-  install -m 0755 "$LINKD_BIN" "$STAGE/usr/local/bin/ml-linkd"
-  "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/ml-linkd" 2>/dev/null || true
-  log "video: staged ml-linkd -> /usr/local/bin/"
+# --------------------------------------------------------------------------------------
+# Role payload.
+# --------------------------------------------------------------------------------------
+if [ "$RF_ROLE" = "air" ]; then
+  # Video TX (same gst-full mechanism as ml-pipeline), its control tool, and the passive FC
+  # UART test tool.
+  stage "$US/gstreamer/build/static/ml-air-video" usr/local/bin/ml-air-video \
+    --tag video --hint "userspace/gstreamer/scripts/build-static.sh"
+  stage "$US/gstreamer/build/bin/ml-air-ctl" usr/local/bin/ml-air-ctl \
+    --tag video --hint "make -C userspace gst"
+  stage "$US/build/ml-msp-echo" usr/local/bin/ml-msp-echo \
+    --tag video --strip --hint "make -C userspace msp-echo"
+fi
+
+if [ "$RF_ROLE" = "ground" ]; then
+  # ml-rf-persist writes a newly-paired peer MAC into the config candidate list under /usrdata
+  # so a bind survives a power cycle; absent, a bind is only a runtime lock. The RX pair
+  # sequence is what learns a MAC - the air unit only enters pair mode from its bind button.
+  stage "$HERE/../native/build/ml-rf-persist" usr/local/bin/ml-rf-persist \
+    --tag video --strip --hint "native/build.sh"
+fi
+
+# ml-ledd drives the WS2812-style RGB LED over spidev, which only some boards carry; the air
+# unit's indicators are plain GPIO LEDs that leds-gpio handles in-kernel. Gated on its own
+# service: the overlay is already staged, so the daemon and its service cannot disagree.
+if [ -f "$STAGE/etc/init.d/ml-ledd" ]; then
+  stage "$US/build/ml-ledd" usr/local/bin/ml-ledd \
+    --tag ml-ledd --hint "make -C userspace ledd"
+fi
+
+# SD payload: the uMTP-Responder daemon the usb-gadget service starts to expose recordings over
+# USB. Built by `make umtprd` alone - it clones upstream, so it is not part of `make native`.
+# Absent, the gadget binds ECM-only, so MTP never costs SSH.
+#
+# Its config ships in the shared skeleton, so a card-less board is handed one unless it is dropped
+# here; the templating further down is already presence-gated and skips it once it is gone.
+if [ "$HAS_SD" = 1 ]; then
+  stage "$HERE/../native/umtprd/build/umtprd" usr/local/bin/umtprd \
+    --tag mtp --hint "make umtprd"
 else
-  log "video: $LINKD_BIN absent (build with make -C userspace linkd); skipping"
-fi
-
-MSP_ECHO_BIN="$US/build/ml-msp-echo"
-if [ "$DEV" = "betafpv-vr04-air" ] && [ -f "$MSP_ECHO_BIN" ]; then
-  mkdir -p "$STAGE/usr/local/bin"
-  install -m 0755 "$MSP_ECHO_BIN" "$STAGE/usr/local/bin/ml-msp-echo"
-  "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/ml-msp-echo" 2>/dev/null || true
-  log "video: staged ml-msp-echo -> /usr/local/bin/"
-fi
-
-# ml-rf-bringup: the AR8030 RF link bring-up at boot (ml-video service) - reset release, SDIO
-# re-probe, baseband firmware download, sdio0 config (absorbs the old gpio_pulse). Essential: with
-# no RF bring-up there is no video, so a missing binary is a HARD build error, not a silent skip.
-# Static aarch64 (make -C userspace rf-bringup).
-RF_BRINGUP_BIN="$US/build/ml-rf-bringup"
-if [ -f "$RF_BRINGUP_BIN" ]; then
-  mkdir -p "$STAGE/usr/local/bin"
-  install -m 0755 "$RF_BRINGUP_BIN" "$STAGE/usr/local/bin/ml-rf-bringup"
-  "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/ml-rf-bringup" 2>/dev/null || true
-  log "video: staged ml-rf-bringup -> /usr/local/bin/ (AR8030 RF link bring-up at boot)"
-else
-  die "video: $RF_BRINGUP_BIN absent - RF bring-up is essential; build it with 'make -C userspace rf-bringup'"
-fi
-
-# ml-rf-persist (native/build.sh): writes a newly-paired air-unit MAC into the config candidate list
-# under /usrdata so a bind survives reboot. ml-linkd execs it on a successful persist-mode bind;
-# absent, binding still works but only as a runtime lock (a power cycle drops it). Static aarch64.
-RF_PERSIST_BIN="$HERE/../native/build/ml-rf-persist"
-if [ -f "$RF_PERSIST_BIN" ]; then
-  mkdir -p "$STAGE/usr/local/bin"
-  install -m 0755 "$RF_PERSIST_BIN" "$STAGE/usr/local/bin/ml-rf-persist"
-  "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/ml-rf-persist" 2>/dev/null || true
-  log "video: staged ml-rf-persist -> /usr/local/bin/ (persist a paired air-unit MAC across reboot)"
-else
-  log "video: $RF_PERSIST_BIN absent (build with native/build.sh); binding will be runtime-only"
-fi
-
-# ml-boot-record (native/build.sh): marks a healthy boot in /usrdata/missinglynk/device.json
-# (increments boots, records the /etc/ml-release version). Run once late by the ml-boot-record
-# service; absent, the per-unit boot count simply is not maintained. Static aarch64.
-BOOT_RECORD_BIN="$HERE/../native/build/ml-boot-record"
-if [ -f "$BOOT_RECORD_BIN" ]; then
-  mkdir -p "$STAGE/usr/local/bin"
-  install -m 0755 "$BOOT_RECORD_BIN" "$STAGE/usr/local/bin/ml-boot-record"
-  "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/ml-boot-record" 2>/dev/null || true
-  log "identity: staged ml-boot-record -> /usr/local/bin/ (mark a healthy boot in device.json)"
-else
-  log "identity: $BOOT_RECORD_BIN absent (build with native/build.sh); boot count not maintained"
-fi
-
-# minidhcpd (native/build.sh, the musl-static build): single-lease DHCP on the USB gadget link so
-# a phone/PC running a DHCP client gets an address on the gadget /24 (the Android app finds the
-# device by that subnet). Started by the usb-gadget service; absent, static-IP hosts still work.
-MINIDHCPD_BIN="$HERE/../native/build/minidhcpd-musl"
-if [ -f "$MINIDHCPD_BIN" ]; then
-  mkdir -p "$STAGE/usr/local/bin"
-  install -m 0755 "$MINIDHCPD_BIN" "$STAGE/usr/local/bin/minidhcpd"
-  log "net: staged minidhcpd -> /usr/local/bin/ (DHCP lease on the USB gadget link)"
-else
-  log "net: $MINIDHCPD_BIN absent (build with native/build.sh); USB hosts need a static IP"
-fi
-
-# Slot-switch helpers for the HUD's "Switch to Slot A" action: mtdtool (flips the gpt0 active bit;
-# native/build.sh) and wdt-reset (watchdog reset so the SPL boots the active slot; built from
-# glue/boot/wdt-reset.c). Both aarch64 static. Skipped if absent.
-MTDTOOL_BIN="$HERE/../native/build/mtdtool"
-WDTRESET_BIN="$HERE/../glue/build/wdt-reset"
-# name|path|build-hint (mtdtool from the native gcc:7 container; wdt-reset from the glue Makefile)
-for entry in "mtdtool|$MTDTOOL_BIN|native/build.sh" "wdt-reset|$WDTRESET_BIN|make -C glue"; do
-  name="${entry%%|*}"; rest="${entry#*|}"
-  path="${rest%%|*}"; hint="${rest#*|}"
-  if [ -f "$path" ]; then
-    mkdir -p "$STAGE/usr/local/bin"
-    install -m 0755 "$path" "$STAGE/usr/local/bin/$name"
-    "${CROSS_STRIP:-aarch64-linux-gnu-strip}" "$STAGE/usr/local/bin/$name" 2>/dev/null || true
-    log "slot-switch: staged $name -> /usr/local/bin/"
-  else
-    log "slot-switch: $path absent (build with $hint); skipping (HUD slot switch will no-op)"
-  fi
-done
-
-# ml-ledd (the ml-ledd boot service): the static status-LED indicator daemon. It runs in the
-# boot runlevel before the SD card mounts, so unlike the gst-squashfs daemons it must live in the
-# rootfs itself. Staged if built (ml-ledd/Makefile); the service warns and skips at boot otherwise.
-LEDD_BIN="$US/build/ml-ledd"
-if [ -f "$LEDD_BIN" ]; then
-  mkdir -p "$STAGE/usr/local/bin"
-  install -m 0755 "$LEDD_BIN" "$STAGE/usr/local/bin/ml-ledd"
-  log "ml-ledd: staged -> /usr/local/bin/ml-ledd"
-else
-  log "ml-ledd: $LEDD_BIN absent (build with make -C userspace ledd); skipping"
-fi
-
-# umtprd (started by the usb-gadget service): the uMTP-Responder MTP daemon that exposes the
-# SD-card DVR recordings over USB (ml-kernel issue #5). Static aarch64 musl build from the
-# wrapper's native/umtprd/build.sh (a separate `make umtprd` - it clones upstream, so it is not
-# part of `make native`/`all`). Staged if built; the gadget service falls back to ECM-only at
-# boot otherwise, so MTP being absent never affects ECM/SSH.
-UMTPRD_BIN="$HERE/../native/umtprd/build/umtprd"
-if [ -f "$UMTPRD_BIN" ]; then
-  mkdir -p "$STAGE/usr/local/bin"
-  install -m 0755 "$UMTPRD_BIN" "$STAGE/usr/local/bin/umtprd"
-  log "mtp: staged umtprd -> /usr/local/bin/umtprd"
-else
-  log "mtp: $UMTPRD_BIN absent (build with 'make umtprd'); MTP gadget will fall back to ECM-only"
+  rm -f "$STAGE/etc/umtprd.conf"
 fi
 
 echo "$HOSTNAME" > "$STAGE/etc/hostname"
@@ -551,8 +558,8 @@ chmod 0755 "$STAGE/etc/init.d/usb-gadget"
 # name matches the USB descriptor (skeleton/etc/umtprd.conf).
 [ -f "$STAGE/etc/umtprd.conf" ] && sed -i -e "s|@USB_PRODUCT@|$USB_PRODUCT|" "$STAGE/etc/umtprd.conf"
 
-# Template the hardware version into the air-unit link service (devices/betafpv-vr04-air overlay);
-# only present on the air unit, whose board.conf sets HW_VERSION.
+# Template the hardware version into the air-unit link service. File-presence gated: only an
+# air-role overlay ships it, and only those profiles set HW_VERSION.
 [ -f "$STAGE/etc/init.d/ml-air-link" ] && sed -i -e "s|@HW_VERSION@|${HW_VERSION:-V1.0}|" "$STAGE/etc/init.d/ml-air-link"
 
 # Precompute the root password hash (fixed salt -> reproducible /etc/shadow line).

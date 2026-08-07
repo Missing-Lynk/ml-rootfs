@@ -21,6 +21,16 @@ The base package set (both flavors) is intentionally tiny: `alpine-base`, `busyb
 
 The build is pinned (Alpine 3.24.1 minirootfs sha256-verified for the signing keys, apk-tools-static 3.0.6-r0) and runs entirely on the host with no root and without touching any hardware, under `fakeroot` so the files land in the image as `root:root`.
 
+This repo holds no compiled code. It is the device profiles, the config tree, and the build machinery; the only executables it ships from its own tree are a handful of POSIX shell helpers under `skeleton/` and the device overlays. Every binary in the image is built elsewhere in [the project](https://github.com/Missing-Lynk) and staged at build time - see [Staged firmware and binaries](#staged-firmware-and-binaries).
+
+The paths below are written as they appear in a wrapper checkout, where this repo sits alongside its siblings:
+
+| Path | Repo | Supplies |
+|---|---|---|
+| `../userspace/` | [ml-userspace](https://github.com/Missing-Lynk/ml-userspace) | video pipeline, RF daemon, HUD, display broker, LED daemon, shared assets |
+| `../kernel/` | [ml-kernel](https://github.com/Missing-Lynk/ml-kernel) | the kernel and its loadable modules |
+| `../native/`, `../glue/`, `../firmware/` | [MissingLynk](https://github.com/Missing-Lynk/MissingLynk) | static helpers, host-side tooling, vendor blobs - directories in the umbrella repo, not repos of their own |
+
 The image records its own identity: `/etc/ml-flavor` (`dev`|`slim`) and `/etc/ml-release` (open firmware version, kernel version, rootfs/kernel git-describes, build time, device), so on-device tooling can answer "what image is this" from inside the slot.
 
 Hostname and root password come from the device profile; the profiles shipped here all use the password `libre`. Dropbear permits root password login and generates its host keys on first boot into `/etc/dropbear`. In the `dev` flavor `openssh-sftp-server` lands at `/usr/lib/ssh/sftp-server`, which dropbear serves as its SFTP subsystem automatically (no config), so `scp`, `sftp`, and file-manager mounts work; `slim` has no scp - update it by reflashing.
@@ -65,7 +75,11 @@ If the kernel modules have been built (`../kernel/modules/build.sh`, which stage
 - **RF baseband firmware** - the AR8030 image + config for this device's `RF_ROLE`. On the ground role the captured race-band config is also rewritten into a normal-band variant (the band is the config's `chan_valid_bmp` and only reaches the chip at firmware upload, so each band is a whole blob and switching one costs a boot).
 - **ISP tuning blob** - air unit only, and a *hard build error* if missing or the wrong size: `ar-isp` merely warns and runs unconfigured, and an unconfigured ISP produces garbage that still encodes, transmits and decodes with every counter healthy, so the failure is invisible everywhere downstream.
 
-The open stack's own binaries are staged into `/usr/local/bin` from `../userspace/`, `../native/` and `../glue/`; `build.sh` is the authoritative list, and each entry names the command that builds it. They are independently optional: staged if built, skipped with a log line otherwise, and the service that uses it then warns and skips at boot - so the image always builds on a fresh clone, it just lacks that feature. Two entries are hard build errors instead of skips: `ml-rf-bringup` (no RF bring-up means no video at all) and the SD helper library `/usr/local/lib/ml-sd.sh`.
+The open stack's binaries are staged into `/usr/local/bin` from the sibling trees listed [above](#what-the-image-is): `../userspace/` for the video and display stack, `../native/` for the small static helpers and the MTP responder, `../glue/` for `wdt-reset`. `build.sh` is the authoritative list, and each entry names the command that builds it.
+
+They are independently optional: staged if built, skipped with a log line otherwise, and the service that uses one then warns and skips at boot - so the image always builds on a fresh clone, it just lacks that feature. The exception is `ml-rf-bringup`, a hard build error rather than a skip, because no RF bring-up means no video at all. Which binaries a device gets is decided by its profile flags, not its name, so a board with no panel is never given the display stack.
+
+Independently of all that, `make-rootfs.sh` fails the build if `/usr/local/lib/ml-sd.sh` is missing from the staged tree. That one is not a sibling artifact - it is a shell library in this repo's `skeleton/`, shared by the SD mount and format paths, and a build without it would ship an image whose card never appears.
 
 ## Boot services
 
@@ -95,9 +109,24 @@ The status LED needs no module: its SPI/spidev/leds-gpio drivers are built in an
 Everything per-device lives in `devices/<name>/`:
 
 - **`board.conf`** - hostname and root password, USB product string, the ECM addressing and MACs, feature flags (`HAS_SD`, `HAS_DISPLAY`, `RF_ROLE`), and the NAND/UBI geometry plus target partition. The build fails early if a required variable is missing.
+
+  These flags are what the build branches on: no artifact is staged because of a device *name*, only because of a declared capability. A board with no panel gets no display binaries and no splash; a board with no card gets no MTP daemon. `RF_ROLE` selects the whole air- or ground-side payload, baseband firmware and camera artifacts alike.
 - **`overlay/`** - the device-specific OpenRC services and `modules-load.d`, layered on the shared `skeleton/`.
 
-To add a device, create `devices/<name>/board.conf` (plus an `overlay/` for any device-specific services) and pass `<name>` to `build.sh`. The same device names are used by the root `Makefile` and `kernel/devices/<name>/`.
+### Adding a device
+
+The same device name is used here, by the root `Makefile`, and by `kernel/devices/<name>/`.
+
+1. **`devices/<name>/board.conf`** - copy the nearest existing profile and change the values. The build fails early on a missing required variable, a `HAS_*` flag that is not `0`/`1`, or an `RF_ROLE` that is not `air`/`ground`, so a half-filled profile stops the build rather than producing a quietly wrong image.
+2. **`devices/<name>/overlay/`** - only what differs from `skeleton/`: the board's OpenRC services and its `modules-load.d/ml.conf`. Files here are layered on the shared tree and override it at the same path. Optional; a board that needs nothing extra needs no overlay.
+3. **A row in the supported-devices table** at the top of this README.
+
+A board that reuses the existing services needs nothing beyond those three steps. Two cases go further:
+
+- **A service the tree has never seen before** also needs its runlevel registered in `scripts/make-rootfs.sh`, which enables services by name. Reusing an existing service needs no change there. Registration is easy to forget and fails quietly - the service file is copied into the image but linked into no runlevel, so it simply never runs - so add it in the same commit as the service.
+- **Staging that no flag can express** - a new firmware blob, or a binary no current board uses - needs a `build.sh` change. Anything a `HAS_*` flag or `RF_ROLE` already covers does not: the build branches on capability, never on device name.
+
+Put any executable the overlay ships in `/usr/local/bin`. `make-rootfs.sh` force-sets the exec bit there and on `/etc/init.d/*`, which is what stops a lost mode bit from silently turning a service into a no-op.
 
 ## Flash
 
