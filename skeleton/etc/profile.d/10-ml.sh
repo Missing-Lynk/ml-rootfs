@@ -1,3 +1,4 @@
+# shellcheck shell=sh  # sourced, not executed: no shebang of its own
 # Interactive-shell niceties for the open Artosyn rootfs (sourced by /etc/profile on
 # login). Busybox-ash safe; no util-linux/coreutils deps.
 

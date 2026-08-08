@@ -10,6 +10,7 @@ kver="$(uname -r)"
 ver="?"
 built="?"
 if [ -r /etc/ml-release ]; then
+	# shellcheck source=/dev/null  # generated on the device at build time
 	. /etc/ml-release
 	ver="${ML_VERSION:-?}"
 	built="${ML_BUILD_TIME:-?}"
@@ -17,6 +18,7 @@ fi
 
 # Which partition/volume booted, straight from the kernel cmdline.
 boot=""
+# shellcheck disable=SC2013  # cmdline is one space-separated line: word splitting is the intent
 for tok in $(cat /proc/cmdline 2>/dev/null); do
 	case "$tok" in
 		ubi.mtd=*|root=*) boot="$boot $tok";;

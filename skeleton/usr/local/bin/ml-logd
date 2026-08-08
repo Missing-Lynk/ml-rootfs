@@ -28,7 +28,7 @@ mkdir -p "$LOGROOT" || { echo "ml-logd: cannot create $LOGROOT"; exit 0; }
 # the run-*/ glob never matches it.
 CF="$LOGROOT/.runcount"
 n=0
-[ -f "$CF" ] && read n < "$CF" 2>/dev/null
+[ -f "$CF" ] && read -r n < "$CF" 2>/dev/null
 # A power cut mid-write, or the FAT/exFAT damage a battery-out pull leaves behind, leaves this file
 # holding something that is not a run number, and $((n + 1)) on that misbehaves in two ways.
 # Measured under busybox ash: "12x", "3.5" and anything with an embedded space abort the script with
@@ -143,7 +143,7 @@ ENVDONE=""
 sample_threads() {
 	tup="$1"
 	# Machine-wide jiffies: user nice system idle iowait irq softirq steal.
-	read _ cu cn cs ci cw cq cx cst _ < /proc/stat
+	read -r _ cu cn cs ci cw cq cx cst _ < /proc/stat
 	echo "$tup,_cpu,0,total,-,$((cu + cn + cs + ci + cw + cq + cx + cst))" >> "$THREADS"
 	echo "$tup,_cpu,0,busy,-,$((cu + cn + cs + cq + cx + cst))" >> "$THREADS"
 
@@ -163,6 +163,7 @@ sample_threads() {
 			read -r tname < "${tst%/stat}/comm" 2>/dev/null || tname="?"
 			# comm may contain spaces: fields resume after the closing paren.
 			rest="${line##*) }"
+			# shellcheck disable=SC2086  # splitting $rest into fields is the intent
 			set -- $rest
 			# rest: state ppid pgrp sess tty tpgid flags minflt cminflt majflt cmajflt utime stime
 			state="$1"
@@ -184,7 +185,7 @@ sample_threads() {
 
 while : ; do
 	# uptime (first field of /proc/uptime).
-	read up _ < /proc/uptime
+	read -r up _ < /proc/uptime
 
 	# Pull the four meminfo fields with a single builtin pass (no grep/awk fork).
 	mf=""; ma=""; cf=""; ct=""
@@ -197,7 +198,7 @@ while : ; do
 		esac
 	done < /proc/meminfo
 
-	read l1 _ < /proc/loadavg
+	read -r l1 _ < /proc/loadavg
 
 	echo "$up,$mf,$ma,$cf,$ct,$l1" >> "$STATS"
 

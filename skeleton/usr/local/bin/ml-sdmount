@@ -8,6 +8,11 @@
 
 MNT=/mnt/sdcard
 LOCK=/run/ml-sdmount.lock
+# The detached reconcile has no usable stderr: it is re-exec'd from an mdev event, so anything it
+# writes would land in whatever fired that event. Give it a log of its own rather than /dev/null,
+# so a failing mount is diagnosable. /var/log is the 8 MiB tmpfs ml-logd mirrors to the SD session
+# dir and truncates when full, so appending here needs no rotation of its own.
+LOG=/var/log/ml-sdmount.log
 
 # Card selection is shared with ml-sdformat so a mount and a format cannot pick different devices.
 # shellcheck source=../lib/ml-sd.sh
@@ -21,7 +26,7 @@ LOCK=/run/ml-sdmount.lock
 # (set by mdev) is inherited by the detached worker.
 if [ "${ML_SDMOUNT_LOCKED:-}" != 1 ]; then
 	export ML_SDMOUNT_LOCKED=1
-	setsid flock "$LOCK" "$0" "$@" >/dev/null 2>&1 &
+	setsid flock "$LOCK" "$0" "$@" >>"$LOG" 2>&1 &
 	exit 0
 fi
 

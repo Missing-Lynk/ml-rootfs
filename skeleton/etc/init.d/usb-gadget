@@ -158,7 +158,11 @@ start() {
 	local udc=""
 	local i=0
 	while [ "$i" -lt 50 ]; do
-		udc="$(ls /sys/class/udc 2>/dev/null | head -n1)"
+		for u in /sys/class/udc/*; do
+			[ -e "$u" ] || continue
+			udc="${u##*/}"
+			break
+		done
 		[ -n "$udc" ] && break
 		i=$((i + 1))
 		sleep 0.2

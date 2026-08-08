@@ -11,6 +11,7 @@ mkdir -p "$ROOT"
 
 # Build the rootfs from scratch. --usermode lets apk run as the (faked) root user;
 # --no-scripts skips aarch64 post-install scripts that cannot run on the x86_64 host.
+# shellcheck disable=SC2086  # $PACKAGES is a space-separated list and must word-split
 "$APK_STATIC" --root "$ROOT" --arch aarch64 --keys-dir "$KEYS" \
   --repository "$MAIN_REPO" --repository "$COMMUNITY_REPO" \
   --initdb --no-scripts --usermode --update-cache \
@@ -24,6 +25,7 @@ mkdir -p "$ROOT"
 # QEMU_LD_PREFIX points qemu at the rootfs so it finds busybox's musl loader + libs;
 # LD_PRELOAD= drops fakeroot's x86_64 preload, which otherwise gets injected into the
 # emulated aarch64 process and fails to relocate (this listing needs no fakeroot).
+# shellcheck disable=SC1007  # LD_PRELOAD= is a deliberate empty override for this one command
 LD_PRELOAD= QEMU_LD_PREFIX="$ROOT" qemu-aarch64-static "$ROOT/bin/busybox" --list-full | while read -r path; do
   [ -n "$path" ] && [ "$path" != "bin/busybox" ] || continue
   mkdir -p "$ROOT/$(dirname "$path")"

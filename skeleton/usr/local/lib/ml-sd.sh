@@ -1,3 +1,4 @@
+# shellcheck shell=sh  # sourced, not executed: no shebang of its own
 # Shared microSD block-device selection. Sourced by ml-sdmount (which mounts the card) and by
 # ml-sdformat (which wipes it). One rule in one place: when the two disagree, Format either cannot
 # find the card the system just mounted, or writes over a device the mount never chose.

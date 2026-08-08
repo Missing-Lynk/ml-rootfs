@@ -572,6 +572,7 @@ chmod 0755 "$STAGE/etc/init.d/usb-gadget"
 [ -f "$STAGE/etc/init.d/ml-air-link" ] && sed -i -e "s|@HW_VERSION@|${HW_VERSION:-V1.0}|" "$STAGE/etc/init.d/ml-air-link"
 
 # Precompute the root password hash (fixed salt -> reproducible /etc/shadow line).
+# shellcheck disable=SC2153  # ROOT_PASS comes from $DEVICE_CONF, presence-checked above
 ROOT_HASH="$(openssl passwd -6 -salt artlynkopen "$ROOT_PASS")"
 
 # ======================================================================================
