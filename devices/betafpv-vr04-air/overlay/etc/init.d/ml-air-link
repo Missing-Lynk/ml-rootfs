@@ -21,6 +21,11 @@ depend() {
 start() {
 	ebegin "Starting air-unit RF link"
 
+	# Prefer a persisted config over the baked one: ml-rf-persist --air writes the bound peer
+	# there after a successful bind, and ml-rf-bringup puts this on the kernel firmware search
+	# path so the driver loads it when present and falls back to /lib/firmware otherwise.
+	export ML_RF_FW_PATH=/usrdata/missinglynk
+
 	if [ -x "$RF_BRINGUP" ] && [ -f "/lib/firmware/$RF_FW" ] && [ -f "/lib/firmware/$RF_CFG" ]; then
 		# The air side of the sdio0 link is 10.0.0.100 (ml-rf-bringup defaults to the
 		# ground address 10.0.0.1).
