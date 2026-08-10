@@ -512,6 +512,10 @@ if [ "$RF_ROLE" = "ground" ]; then
   # sequence is what learns a MAC - the air unit only enters pair mode from its bind button.
   stage "$HERE/../native/build/ml-rf-persist" usr/local/bin/ml-rf-persist \
     --tag video --strip --hint "native/build.sh"
+  # Sends the HUD's own RF commands (channel, scan, bind) from a shell, so those paths are
+  # reachable without the UI.
+  stage "$US/build/ml-rfcmd" usr/local/bin/ml-rfcmd \
+    --tag video --strip --hint "make -C userspace rfcmd"
 fi
 
 # ml-ledd drives the WS2812-style RGB LED over spidev, which only some boards carry; the air
