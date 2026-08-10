@@ -38,11 +38,20 @@ start() {
 		ewarn "ml-air-link: air baseband firmware not baked; bring RF up out of band"
 	fi
 
+	# --power-adapt: radiated power follows the FC arm state, frame rate follows the goggle's
+	# standby arm. A disarmed aircraft holds the minimum whatever the goggle asks for; arming
+	# hands power back to the commanded value. With no FC the arm state is unknown rather than
+	# disarmed, so the goggle stays authoritative and a bench unit is not pinned low.
+	#
+	# The standby frame-rate drop needs an ml-air-video carrying the `capfps` verb. build.sh
+	# stages both binaries from the same userspace tree so a flashed image is always a matched
+	# pair; a HAND-DEPLOYED ml-linkd over an older ml-air-video is not, and fails silently in one
+	# direction only - power drops, bitrate does not.
 	if [ -x "$LINKD" ]; then
 		start-stop-daemon --start --background --make-pidfile \
 			--pidfile /run/ml-linkd.pid --exec "$LINKD" \
 			--stdout /var/log/ml-linkd.log --stderr /var/log/ml-linkd.log \
-			-- --role air --hw-version "@HW_VERSION@"
+			-- --role air --hw-version "@HW_VERSION@" --power-adapt
 	else
 		ewarn "ml-air-link: $LINKD missing"
 	fi
