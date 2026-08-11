@@ -67,7 +67,7 @@ If `../kernel/modules/build.sh` has staged modules, `build.sh` copies them into 
 
 ### Staged firmware and binaries
 
-`build.sh` bakes required proprietary blobs into `/lib/firmware` from `../firmware/bin/slot-a/` (git-ignored; populate it from your own device with `../glue/fetch/fetch-vendor-blobs.sh`):
+`build.sh` bakes required proprietary blobs into `/lib/firmware` from `../firmware/bin/slot-a/` (populate it from your own device with `../glue/fetch/fetch-vendor-blobs.sh`):
 
 - **Codec firmware** - `chagall.bin` as `cnm/wave521c_k3_codec_fw.bin`, which `wave5.ko` requests on load.
 - **RF baseband firmware** - the AR8030 image and config for this device's `RF_ROLE`.

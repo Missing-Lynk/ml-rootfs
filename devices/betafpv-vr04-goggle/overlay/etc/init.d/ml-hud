@@ -5,28 +5,25 @@
 # socket before starting. `after ... hwdrivers`: the coldplug has loaded artosyn_adc, so
 # /dev/input/event0 (keypad) and the battery ADC channel exist. This service loads no modules.
 #
-# Best-effort: a missing binary/socket/driver logs a warning and leaves the box otherwise up.
+# The binary and font are build-required. A missing broker socket logs a warning and the HUD retries.
 description="HUD: menu + OSD on the DRM overlay"
 
-HUD=/usr/local/bin/ml-hud
 FONT=/usr/local/share/hud/font_BTFL_hd.png
 SOCK=/run/missinglynk/drm.sock
-PIDFILE=/run/ml-hud.pid
 PLANE=38
+command="/usr/local/bin/ml-hud"
+command_args="--drm $PLANE --idle-ms 0 --btfl-font $FONT"
+command_background="yes"
+output_log="/var/log/ml-hud.log"
+error_log="/var/log/ml-hud.log"
+pidfile="/run/ml-hud.pid"
+required_files="$command $FONT"
 
 depend() {
 	after ml-display modules mdev hwdrivers
 }
 
-start() {
-	ebegin "Starting HUD"
-
-	if [ ! -x "$HUD" ]; then
-		ewarn "ml-hud: $HUD missing (build hud/ and stage it); skipping"
-		eend 0
-		return 0
-	fi
-
+start_pre() {
 	# Wait for the broker socket (ml-display brings it up just ahead of us).
 	local i=0
 	while [ ! -S "$SOCK" ] && [ $i -lt 50 ]; do
@@ -36,19 +33,12 @@ start() {
 	if [ ! -S "$SOCK" ]; then
 		ewarn "ml-hud: $SOCK never appeared (is ml-display up?); starting anyway, HUD will retry"
 	fi
-
-	start-stop-daemon --start --background --make-pidfile --pidfile "$PIDFILE" \
-		--stdout /var/log/ml-hud.log --stderr /var/log/ml-hud.log \
-		--exec "$HUD" -- --drm "$PLANE" --idle-ms 0 \
-		--btfl-font "$FONT"
-
-	eend $?
 }
 
 stop() {
 	# SIGTERM (start-stop-daemon default) so the HUD runs its cleanup and frees its DRM overlay
 	# buffer - a SIGKILL would leak it into the broker's shared drm_file.
 	ebegin "Stopping HUD"
-	start-stop-daemon --stop --pidfile "$PIDFILE" 2>/dev/null
+	start-stop-daemon --stop --pidfile "$pidfile" 2>/dev/null
 	eend 0
 }
