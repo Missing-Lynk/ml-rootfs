@@ -498,7 +498,7 @@ if [ "$HAS_DISPLAY" = 1 ]; then
     --tag video --hint "userspace/gstreamer/scripts/build-static.sh" \
     --why "ground-role video cannot flow without the static receiver pipeline"
 
-  # Watchdog reset so the SPL boots the active slot. Only the HUD's "Switch to Slot A" runs it.
+  # Watchdog reset so the SPL boots the active slot. Only the HUD's deliberate reset actions run it.
   stage "$HERE/../glue/build/wdt-reset" usr/local/bin/wdt-reset \
     --tag slot-switch --strip --hint "make -C glue"
 fi
