@@ -3,10 +3,11 @@ description="Mark a healthy boot in the per-unit device record (/usrdata/missing
 
 BOOT_RECORD=/usr/local/bin/ml-boot-record
 
-# Ordered after the services that make the unit usable (SSH, RF video, HUD) and after the usrdata
-# mount, so reaching this point means the slot came up healthy and device.json is writable.
+# Ordered after the services that make each unit usable and after the usrdata mount, so reaching
+# this point means the slot came up healthy and device.json is writable. The goggle has
+# ml-video/ml-hud; the air unit has ml-air-link/ml-air-camera. Missing service names are inert.
 depend() {
-	after ml-usrdata dropbear ml-video ml-hud
+	after ml-usrdata dropbear ml-video ml-hud ml-air-link ml-air-camera
 }
 
 start() {
