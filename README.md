@@ -47,7 +47,7 @@ The gadget service declares `provide net`, which satisfies dropbear's `need net`
 
 ## Build
 
-Run on the host (needs `fakeroot`, `openssl`, `curl`, `qemu-aarch64-static` from `qemu-user-static`, and `mkfs.ubifs`/`ubinize` from `mtd-utils`). The whole build runs as plain host processes, no container and no root. The only downloads are the pinned, sha256-verified Alpine build inputs (`apk.static` and the signing keys), cached under `build/dl/`:
+Run on an x86_64 host (needs `fakeroot`, `openssl`, `curl`, `qemu-aarch64-static` from `qemu-user-static`, and `mkfs.ubifs`/`ubinize` from `mtd-utils`). The whole build runs as plain host processes, no container and no root. The only downloads are the pinned, sha256-verified Alpine build inputs (`apk.static` and the signing keys), cached under `build/dl/`; another host architecture needs its `apk.static` checksum pinned before the build will run:
 
 ```sh
 build.sh betafpv-vr04-goggle              # dev flavor (default); the device name is required

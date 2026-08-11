@@ -42,7 +42,7 @@ ALPINE_VER="3.24.1"
 ALPINE_CDN="https://dl-cdn.alpinelinux.org/alpine"
 MINIROOTFS_SHA256="f55a90f69052c5bd6f92cb09a8f47065970830b194c917a006fb94028e721259"
 APK_TOOLS_VER="3.0.6-r0"
-# apk-tools-static sha is pinned for x86_64 build hosts; other host arches skip it.
+# apk-tools-static sha is pinned for x86_64 build hosts; add a pin before enabling another host arch.
 APK_STATIC_SHA256_x86_64="a62f54609910d1eb23d8ebcf69dd7954280fe76047452bb88410122cbca14a6e"
 
 # Build flavor default: `dev` (full bring-up tooling: scp/sftp, util-linux, strace/
@@ -250,8 +250,14 @@ fetch() {  # url outfile [sha256]
 }
 
 # 1. apk-tools-static (host runner).
-APK_SHA=""
-[ "$HOST_ARCH" = "x86_64" ] && APK_SHA="$APK_STATIC_SHA256_x86_64"
+case "$HOST_ARCH" in
+  x86_64)
+    APK_SHA="$APK_STATIC_SHA256_x86_64"
+    ;;
+  *)
+    die "unsupported host arch '$HOST_ARCH': no pinned sha256 for $APK_STATIC_PKG"
+    ;;
+esac
 fetch "$APK_STATIC_URL" "$DL/$APK_STATIC_PKG" "$APK_SHA"
 APK_STATIC="$WORK/sbin/apk.static"
 rm -rf "$WORK/sbin"
