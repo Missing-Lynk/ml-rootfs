@@ -37,7 +37,7 @@ mount_placeholder() {
 	mkdir -p "$MNT"
 	mount -t tmpfs -o size=64k tmpfs "$MNT" || return 1
 	printf 'No SD card inserted.\nInsert a microSD card to record and store video.\n' > "$MNT/No_SD_Card.txt"
-	mount -o remount,ro "$MNT"
+	mount -o remount,ro "$MNT" || return 1
 }
 
 card="$(sd_mount_source)"
@@ -72,5 +72,8 @@ case "$(sd_mounted_source "$MNT")" in
 		umount -l "$MNT" 2>/dev/null ;;      # a card was pulled: drop it, then place the marker
 esac
 
-mount_placeholder
+if ! mount_placeholder; then
+	echo "ml-sdmount: failed to install read-only placeholder at $MNT"
+	exit 0
+fi
 exit 0
