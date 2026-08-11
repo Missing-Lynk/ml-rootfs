@@ -294,9 +294,9 @@ mkdir -p "$STAGE/etc/apk"
 #   stage     SRC DST [--tag T] [--hint H | --see S] [--mode M] [--strip]
 #   stage_req SRC DST [--tag T] [--hint H | --see S] [--mode M] [--strip] [--why W]
 #
-# stage installs SRC if a sibling repo built it and says where to get it otherwise, so a fresh
-# clone still produces an image. stage_req dies instead; --why states what breaks on the
-# device. DST is relative to the image root, no leading slash. --tag prefixes the log line.
+# stage installs optional SRC when present and says how to produce it when absent. stage_req
+# dies instead; --why states what breaks on the device. DST is relative to the image root,
+# no leading slash. --tag prefixes the log line.
 #
 # --hint is the command that builds SRC; --see points at an asset that is committed rather
 # than built, where "build with" would be wrong.
