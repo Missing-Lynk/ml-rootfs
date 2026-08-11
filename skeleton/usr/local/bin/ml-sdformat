@@ -6,6 +6,15 @@ set -u
 export PATH="/bin:/sbin:/usr/bin:/usr/sbin:$PATH"
 FS="${1:-exFAT}"
 MNT=/mnt/sdcard
+LOCK=/run/ml-sdmount.lock
+
+# Serialize with ml-sdmount's boot and hotplug reconciles. The lock covers target selection,
+# unmount, wipe, mkfs and remount so a card event cannot put the placeholder or old card mount
+# back under us midway through formatting.
+if [ "${ML_SDFORMAT_LOCKED:-}" != 1 ]; then
+	export ML_SDFORMAT_LOCKED=1
+	exec flock "$LOCK" "$0" "$@"
+fi
 
 # Card selection is shared with ml-sdmount so a format cannot pick a different device than the mount.
 # shellcheck source=../lib/ml-sd.sh
