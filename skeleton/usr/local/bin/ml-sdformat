@@ -28,8 +28,14 @@ esac
 [ -n "$DEV" ] || { echo "ml-sdformat: no SD card found"; exit 1; }
 echo "ml-sdformat: formatting $DEV as $FS"
 
-umount "$MNT" 2>/dev/null
-umount -l "$MNT" 2>/dev/null
+sync
+
+# A lazy unmount would hide a still-busy card from /proc/mounts while DVR/MTP/logging may keep
+# writing through old file handles. Format only after a real unmount succeeds.
+if [ -n "$(sd_mounted_source "$MNT")" ] && ! umount "$MNT" 2>/dev/null; then
+	echo "ml-sdformat: $MNT is busy, aborting"
+	exit 1
+fi
 sync
 
 # Abort rather than risk corruption if an open writer still holds the device. The trailing [p ]
