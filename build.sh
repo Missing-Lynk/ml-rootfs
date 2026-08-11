@@ -506,12 +506,16 @@ if [ "$RF_ROLE" = "air" ]; then
     --tag video --strip --hint "make -C userspace msp-echo"
 fi
 
+# ml-rf-persist writes a newly-paired peer MAC into the config under /usrdata so a bind survives a
+# power cycle; absent, a bind is only a runtime lock the next boot forgets. Both roles need it and
+# the binary serves both: the ground writes a candidate list of up to five peers, and `--air` writes
+# the DEV role's single AP scalar. ml-linkd execs it by absolute path (AIR_BIND_PERSIST in
+# ml-air-bind.h, rx_bind on the ground side), and a missing binary is reported only as
+# "persist FAILED" in the bind log, so it is invisible until the next power cycle.
+stage "$HERE/../native/build/ml-rf-persist" usr/local/bin/ml-rf-persist \
+  --tag video --strip --hint "native/build.sh"
+
 if [ "$RF_ROLE" = "ground" ]; then
-  # ml-rf-persist writes a newly-paired peer MAC into the config candidate list under /usrdata
-  # so a bind survives a power cycle; absent, a bind is only a runtime lock. The RX pair
-  # sequence is what learns a MAC - the air unit only enters pair mode from its bind button.
-  stage "$HERE/../native/build/ml-rf-persist" usr/local/bin/ml-rf-persist \
-    --tag video --strip --hint "native/build.sh"
   # Sends the HUD's own RF commands (channel, scan, bind) from a shell, so those paths are
   # reachable without the UI.
   stage "$US/build/ml-rfcmd" usr/local/bin/ml-rfcmd \
