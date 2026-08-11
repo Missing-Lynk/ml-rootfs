@@ -430,8 +430,9 @@ fi
 # Binaries. Every device gets these.
 # --------------------------------------------------------------------------------------
 
-stage "$US/build/ml-linkd" usr/local/bin/ml-linkd \
-  --tag video --strip --hint "make -C userspace linkd"
+stage_req "$US/build/ml-linkd" usr/local/bin/ml-linkd \
+  --tag video --strip --hint "make -C userspace linkd" \
+  --why "ml-linkd owns RF association and the video handshake on both roles"
 
 # AR8030 bring-up at boot: reset release, SDIO re-probe, firmware download, sdio0 config.
 # Required - without it there is no RF and so no video on any device.
@@ -449,8 +450,9 @@ stage "$HERE/../native/build/minidhcpd-musl" usr/local/bin/minidhcpd \
   --tag net --hint "native/build.sh"
 
 # Flips the gpt0 active bit for the slot switch, and is how ml-usrdata attaches usr_data.
-stage "$HERE/../native/build/mtdtool" usr/local/bin/mtdtool \
-  --tag slot-switch --strip --hint "native/build.sh"
+stage_req "$HERE/../native/build/mtdtool" usr/local/bin/mtdtool \
+  --tag slot-switch --strip --hint "native/build.sh" \
+  --why "ml-usrdata needs it to mount the persistent store"
 
 # --------------------------------------------------------------------------------------
 # Display payload: the panel-side stack, none of which a HAS_DISPLAY=0 board can start.
@@ -459,18 +461,20 @@ stage "$HERE/../native/build/mtdtool" usr/local/bin/mtdtool \
 # --------------------------------------------------------------------------------------
 if [ "$HAS_DISPLAY" = 1 ]; then
   # ml-display service: DRM-master broker, splash painter, and the splash asset.
-  for b in ml-drmfd ml-splash; do
-    stage "$US/gstreamer/build/bin/$b" "usr/local/bin/$b" \
-      --tag display --hint "userspace/gstreamer/src/build.sh"
-  done
+  stage_req "$US/gstreamer/build/bin/ml-drmfd" usr/local/bin/ml-drmfd \
+    --tag display --hint "userspace/gstreamer/src/build.sh" \
+    --why "display, HUD and video clients need the DRM broker socket"
+  stage "$US/gstreamer/build/bin/ml-splash" usr/local/bin/ml-splash \
+    --tag display --hint "userspace/gstreamer/src/build.sh"
 
   stage "$US/assets/splash/splash.yuv" usr/local/share/nosignal.yuv \
     --tag display --mode 0644 --see "userspace/assets/splash"
 
   # ml-hud service: menu + OSD on a DRM overlay plane, its glyph font and i18n catalogs.
   HUD_BIN="$US/ml-hud/build/hud"
-  stage "$HUD_BIN" usr/local/bin/ml-hud \
-    --tag hud --strip --hint "userspace/ml-hud/tools/deploy.sh"
+  stage_req "$HUD_BIN" usr/local/bin/ml-hud \
+    --tag hud --strip --hint "userspace/ml-hud/tools/deploy.sh" \
+    --why "HAS_DISPLAY=1 images advertise the HUD/menu as part of the working unit"
   stage "$US/assets/osd-fonts/font_BTFL_hd.png" usr/local/share/hud/font_BTFL_hd.png \
     --tag hud --mode 0644 --hint "userspace/assets/osd-fonts/mcm2png.py"
 
@@ -484,8 +488,9 @@ if [ "$HAS_DISPLAY" = 1 ]; then
   # Standalone static decode/display binary: whole GStreamer + the curated plugin set baked
   # in, no /mnt/gst, no plugin registry. The SD squashfs (gstreamer/scripts/deploy.sh) is the
   # development track.
-  stage "$US/gstreamer/build/static/ml-pipeline" usr/local/bin/ml-pipeline \
-    --tag video --hint "userspace/gstreamer/scripts/build-static.sh"
+  stage_req "$US/gstreamer/build/static/ml-pipeline" usr/local/bin/ml-pipeline \
+    --tag video --hint "userspace/gstreamer/scripts/build-static.sh" \
+    --why "ground-role video cannot flow without the static receiver pipeline"
 
   # Watchdog reset so the SPL boots the active slot. Only the HUD's "Switch to Slot A" runs it.
   stage "$HERE/../glue/build/wdt-reset" usr/local/bin/wdt-reset \
@@ -498,8 +503,9 @@ fi
 if [ "$RF_ROLE" = "air" ]; then
   # Video TX (same gst-full mechanism as ml-pipeline), its control tool, and the passive FC
   # UART test tool.
-  stage "$US/gstreamer/build/static/ml-air-video" usr/local/bin/ml-air-video \
-    --tag video --hint "userspace/gstreamer/scripts/build-static.sh"
+  stage_req "$US/gstreamer/build/static/ml-air-video" usr/local/bin/ml-air-video \
+    --tag video --hint "userspace/gstreamer/scripts/build-static.sh" \
+    --why "air-role video cannot flow without the static camera transmitter"
   stage "$US/gstreamer/build/bin/ml-air-ctl" usr/local/bin/ml-air-ctl \
     --tag video --hint "make -C userspace gst"
   stage "$US/build/ml-msp-echo" usr/local/bin/ml-msp-echo \
@@ -512,8 +518,9 @@ fi
 # the DEV role's single AP scalar. ml-linkd execs it by absolute path (AIR_BIND_PERSIST in
 # ml-air-bind.h, rx_bind on the ground side), and a missing binary is reported only as
 # "persist FAILED" in the bind log, so it is invisible until the next power cycle.
-stage "$HERE/../native/build/ml-rf-persist" usr/local/bin/ml-rf-persist \
-  --tag video --strip --hint "native/build.sh"
+stage_req "$HERE/../native/build/ml-rf-persist" usr/local/bin/ml-rf-persist \
+  --tag video --strip --hint "native/build.sh" \
+  --why "bind persistence silently degrades without it"
 
 if [ "$RF_ROLE" = "ground" ]; then
   # Sends the HUD's own RF commands (channel, scan, bind) from a shell, so those paths are
