@@ -80,7 +80,18 @@ start() {
 
 	einfo "ml-air-camera: capture node $NODE at $FPS fps"
 
+	# ML_AIR_ON_DEMAND: no transmit until a receiver requests a keyframe. The vendor does the same
+	# (AR_FSM_TX_ProcessIdrRequest runs PIPELINE_Start from the not-streaming state).
+	#
+	# A vendor goggle finds access units by magic code in a ring buffer, so a receiver attaching to
+	# an already-running stream starts mid-access-unit: "Not Match Tail Magic Code" once per session,
+	# then "AR_MPI_VDEC_SendStream: invalid frame, bs_size = 0", then "Start Drop Video Data"
+	# permanently.
+	#
+	# Defers the two wave5 encoder instances and the sendto only, opened once on the first request.
+	# The camera chain still comes up at boot: ar-cvisp brings sensor, VIF and ISP up from STREAMON.
 	ML_AIR_CAMERA="$NODE" ML_AIR_FPS="$FPS" ML_AIR_BUFS="$BUFS" ML_AIR_INFLIGHT="$INFLIGHT" \
+	ML_AIR_ON_DEMAND=1 \
 	start-stop-daemon --start --background --make-pidfile \
 		--pidfile "$PIDFILE" --exec "$AIR_VIDEO" \
 		--stdout "$LOG" --stderr "$LOG"
