@@ -12,6 +12,12 @@ description="Air-unit RF link: telemetry/MSP TX (ml-linkd --role air)"
 RF_BRINGUP=/usr/local/bin/ml-rf-bringup
 RF_FW=bb_demo_air_d.img
 RF_CFG=bb_config_air.json
+RF_LOG=/var/log/ml-rf-bringup.log
+USR_DIR=/usrdata/missinglynk
+RF_LEDGER=$USR_DIR/rf-bringup.log
+RF_LEDGER_KEEP=200
+RF_ATTEMPTS=2
+RF_RETRY_WAIT=2
 LINKD=/usr/local/bin/ml-linkd
 
 depend() {
@@ -32,8 +38,49 @@ start() {
 		# Bounded, because this runs in the foreground of the default runlevel: a bring-up that
 		# wedges rather than fails would otherwise stall the rest of boot on a device with no
 		# panel to show it. A timeout exits non-zero, so the warning below covers a hang too.
-		ML_RF_SDIO_ADDR=10.0.0.100 timeout 30 "$RF_BRINGUP" "$RF_FW" "$RF_CFG" \
-			|| ewarn "ml-air-link: RF bring-up incomplete"
+		#
+		# Logged, because ml-rf-bringup names the failing phase on stderr and OpenRC sends that to
+		# the console only. A boot that comes up without sdio0 otherwise leaves no record of which
+		# phase failed, and the only surviving symptom is ml-linkd retrying open(/dev/artosyn_sdio).
+		#
+		# Retried once. A boot-time bring-up has been seen to fail at 16 s with the chip enumerated
+		# and artosyn_sdio never inserted, where an identical manual run at 85 s succeeded without a
+		# power cycle. The retry restores RF on that boot, and the per-attempt outcomes recorded in
+		# $RF_LEDGER separate the two candidate causes: an attempt-1-fails/attempt-2-works pattern is
+		# a chip or host not ready at 16 s, while both attempts failing is the corrupt power-up
+		# device ID (kernel/docs/artosyn-sdio.md), which needs the battery out.
+		attempt=1
+		rf_ok=1
+		while [ "$attempt" -le "$RF_ATTEMPTS" ]; do
+			echo "--- attempt $attempt at $(cut -d' ' -f1 /proc/uptime)s uptime" >>"$RF_LOG"
+			if ML_RF_SDIO_ADDR=10.0.0.100 timeout 30 "$RF_BRINGUP" "$RF_FW" "$RF_CFG" \
+					>>"$RF_LOG" 2>&1; then
+				rf_ok=0
+				break
+			fi
+
+			ewarn "ml-air-link: RF bring-up attempt $attempt failed (see $RF_LOG)"
+			if [ "$attempt" -ge "$RF_ATTEMPTS" ]; then
+				break
+			fi
+
+			attempt=$((attempt + 1))
+			sleep "$RF_RETRY_WAIT"
+		done
+
+		# One line per boot, on the persistent volume, because the interesting boot is the one that
+		# already happened: /var/log is tmpfs and does not survive the battery pull that follows a
+		# failure. Trimmed to the last $RF_LEDGER_KEEP lines so it cannot grow without bound.
+		if [ -d "$USR_DIR" ]; then
+			printf '%s uptime=%ss attempts=%s result=%s\n' \
+				"$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+				"$(cut -d' ' -f1 /proc/uptime)" "$attempt" \
+				"$([ "$rf_ok" -eq 0 ] && echo ok || echo fail)" >>"$RF_LEDGER"
+			tail -n "$RF_LEDGER_KEEP" "$RF_LEDGER" >"$RF_LEDGER.tmp" 2>/dev/null \
+				&& mv "$RF_LEDGER.tmp" "$RF_LEDGER"
+		fi
+
+		cat "$RF_LOG"
 	else
 		ewarn "ml-air-link: air baseband firmware not baked; bring RF up out of band"
 	fi
