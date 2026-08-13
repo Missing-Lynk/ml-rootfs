@@ -39,16 +39,14 @@ start() {
 		# wedges rather than fails would otherwise stall the rest of boot on a device with no
 		# panel to show it. A timeout exits non-zero, so the warning below covers a hang too.
 		#
-		# Logged, because ml-rf-bringup names the failing phase on stderr and OpenRC sends that to
-		# the console only. A boot that comes up without sdio0 otherwise leaves no record of which
-		# phase failed, and the only surviving symptom is ml-linkd retrying open(/dev/artosyn_sdio).
+		# Logged: ml-rf-bringup names the failing phase on stderr, and OpenRC sends that to the
+		# console only, so a boot without sdio0 otherwise leaves no record of which phase failed.
 		#
-		# Retried once. A boot-time bring-up has been seen to fail at 16 s with the chip enumerated
-		# and artosyn_sdio never inserted, where an identical manual run at 85 s succeeded without a
-		# power cycle. The retry restores RF on that boot, and the per-attempt outcomes recorded in
-		# $RF_LEDGER separate the two candidate causes: an attempt-1-fails/attempt-2-works pattern is
-		# a chip or host not ready at 16 s, while both attempts failing is the corrupt power-up
-		# device ID (kernel/docs/artosyn-sdio.md), which needs the battery out.
+		# Retried once: a boot-time bring-up failed at 16 s with the chip enumerated and
+		# artosyn_sdio never inserted, where an identical manual run at 85 s succeeded. The
+		# per-attempt outcomes in $RF_LEDGER separate the causes - fail-then-ok is a chip or host
+		# not ready at 16 s, two failures is the corrupt power-up device ID
+		# (kernel/docs/artosyn-sdio.md), which needs the battery out.
 		attempt=1
 		rf_ok=1
 		while [ "$attempt" -le "$RF_ATTEMPTS" ]; do
@@ -68,9 +66,8 @@ start() {
 			sleep "$RF_RETRY_WAIT"
 		done
 
-		# One line per boot, on the persistent volume, because the interesting boot is the one that
-		# already happened: /var/log is tmpfs and does not survive the battery pull that follows a
-		# failure. Trimmed to the last $RF_LEDGER_KEEP lines so it cannot grow without bound.
+		# One line per boot on the persistent volume: /var/log is tmpfs and does not survive the
+		# battery pull that follows a failure. Trimmed to the last $RF_LEDGER_KEEP lines.
 		if [ -d "$USR_DIR" ]; then
 			printf '%s uptime=%ss attempts=%s result=%s\n' \
 				"$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
