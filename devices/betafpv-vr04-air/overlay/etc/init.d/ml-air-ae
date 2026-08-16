@@ -1,0 +1,80 @@
+#!/sbin/openrc-run
+# Air-unit auto exposure: meter the ISP's rro_stats zone grid and drive sensor exposure, sensor
+# gain and the gain-keyed ISP ladders from one exposure-table index.
+#
+# Without it the camera still streams, at the fixed operating point the driver commits before
+# stream-on, correct only for the light the boot recipe assumed.
+#
+# Separate from ml-air-camera rather than started by it: ml-aed talks to no other daemon, only to
+# the kernel, so it can be stopped or replaced without touching the video path, and a measurement
+# run wants the camera up with AE off.
+description="Air-unit auto exposure: rro_stats metering -> sensor exposure/gain + ISP gain ladders"
+
+AED=/usr/local/bin/ml-aed
+PIDFILE=/run/ml-air-ae.pid
+LOG=/var/log/ml-air-ae.log
+
+# The statistics export, and the only node whose absence means "do not start". It appears when
+# ar-isp probes; it carries data once frames flow.
+STATS=/sys/kernel/debug/ar-isp/stats_raw
+DEBUGFS=/sys/kernel/debug
+
+# 317 is the operating point the driver commits before stream-on, so AE begins where the picture
+# already is instead of visibly hunting for the first second of every flight.
+START_INDEX=317
+
+# ar-cvisp only starts the chain at STREAMON, so this races ml-air-camera rather than ordering
+# strictly after it.
+STATS_WAIT=15
+
+depend() {
+	after modules mdev hwdrivers ml-air-camera
+}
+
+start() {
+	ebegin "Starting air-unit auto exposure"
+
+	if [ ! -x "$AED" ]; then
+		ewarn "ml-air-ae: $AED missing - the camera will stream at a fixed exposure"
+		eend 0
+		return 0
+	fi
+
+	# The whole interface lives under debugfs, which is not in fstab. Mounting here keeps the
+	# dependency with the one service that has it.
+	if [ ! -d "$DEBUGFS/ar-isp" ]; then
+		mount -t debugfs none "$DEBUGFS" 2>/dev/null
+	fi
+
+	i=0
+	while [ "$i" -lt "$STATS_WAIT" ]
+	do
+		[ -e "$STATS" ] && break
+		i=$((i + 1))
+		sleep 1
+	done
+
+	if [ ! -e "$STATS" ]; then
+		ewarn "ml-air-ae: no $STATS after ${STATS_WAIT}s - ar-isp did not probe, exposure stays fixed"
+		eend 0
+		return 0
+	fi
+
+	einfo "ml-air-ae: metering from $STATS, starting at index $START_INDEX"
+
+	# --tone is deliberately not passed: the trigger scalar's producer is an unproven candidate.
+	# Non-verbose on purpose, so only decisions that move the index are logged, which keeps this
+	# inside the 8 MiB /var/log tmpfs over a long session.
+	start-stop-daemon --start --background --make-pidfile \
+		--pidfile "$PIDFILE" --exec "$AED" \
+		--stdout "$LOG" --stderr "$LOG" \
+		-- --start-index "$START_INDEX"
+
+	eend 0
+}
+
+stop() {
+	ebegin "Stopping air-unit auto exposure (exposure stays wherever the loop left it)"
+	start-stop-daemon --stop --pidfile "$PIDFILE" 2>/dev/null
+	eend 0
+}

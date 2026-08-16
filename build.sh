@@ -535,6 +535,16 @@ if [ "$RF_ROLE" = "ground" ]; then
     --tag video --strip --hint "make -C userspace rfcmd"
 fi
 
+# ml-aed is the auto-exposure daemon, which only a board with a camera has any use for. Gated on
+# its own service the same way ml-ledd is: the device overlay is already staged at this point, so
+# the daemon and the service that starts it cannot end up disagreeing about which boards get it.
+# Without the binary the camera still streams, at the fixed operating point the driver commits
+# before stream-on, so this is `stage` and not `stage_req`.
+if [ -f "$STAGE/etc/init.d/ml-air-ae" ]; then
+  stage "$US/build/ml-aed" usr/local/bin/ml-aed \
+    --tag ml-aed --strip --hint "make -C userspace aed"
+fi
+
 # ml-ledd drives the WS2812-style RGB LED over spidev, which only some boards carry; the air
 # unit's indicators are plain GPIO LEDs that leds-gpio handles in-kernel. Gated on its own
 # service: the overlay is already staged, so the daemon and its service cannot disagree.

@@ -167,6 +167,13 @@ if [ -e "$ROOT/etc/init.d/ml-air-camera" ]; then
   ln -sf /etc/init.d/ml-air-camera "$ROOT/etc/runlevels/default/ml-air-camera"
 fi
 
+# Air-unit auto exposure autostart: meters the ISP statistics grid and drives the sensor and the
+# gain-keyed ISP ladders, ordered after ml-air-camera. Present only in the air device overlay, so
+# this enables nothing on the goggle. Without it the camera streams at a fixed operating point.
+if [ -e "$ROOT/etc/init.d/ml-air-ae" ]; then
+  ln -sf /etc/init.d/ml-air-ae "$ROOT/etc/runlevels/default/ml-air-ae"
+fi
+
 # Boot-count recorder, ordered after the usable-unit services (its depend()); marks a healthy boot
 # in the per-unit device record. Best-effort; skips cleanly if /usrdata or the binary is absent.
 if [ -e "$ROOT/etc/init.d/ml-boot-record" ]; then
