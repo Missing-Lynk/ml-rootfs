@@ -151,11 +151,10 @@ case "$RF_ROLE" in
     ;;
 esac
 
-# The tuning blob's device-side name and size are only meaningful together with the source path.
+# The tuning blob's device-side name is only meaningful together with the source path. Its size is
+# not a board property: it comes from the layout, below.
 if [ -n "${ISP_TUNING:-}" ]; then
-  for v in ISP_TUNING_NAME ISP_TUNING_SIZE; do
-    [ -n "${!v:-}" ] || die "device config $DEVICE_CONF: ISP_TUNING set but $v missing"
-  done
+  [ -n "${ISP_TUNING_NAME:-}" ] || die "device config $DEVICE_CONF: ISP_TUNING set but ISP_TUNING_NAME missing"
 fi
 
 
@@ -373,17 +372,23 @@ VENDOR_BLOBS="$HERE/../firmware/bin/slot-a"
 stage "$VENDOR_BLOBS/usr/bin/chagall.bin" lib/firmware/cnm/wave521c_k3_codec_fw.bin \
   --tag "codec firmware" --mode 0644 --hint "glue/fetch/fetch-vendor-blobs.sh"
 
-# ISP tuning blob, request_firmware()d by ar-isp. Which file, what the driver calls it and how
-# big it must be are sensor-specific and declared in the device profile; a board that declares
-# none stages none. Absent or wrong-sized is fatal rather than a skip.
+# ISP tuning blob, request_firmware()d by ar-isp. Declared per board; a board that declares none
+# stages none. Absent or wrong-sized is fatal rather than a skip.
 if [ -n "${ISP_TUNING:-}" ]; then
+  # Expected size from the generated blob header, so this and the driver's check agree.
+  ISP_BLOB_H="$HERE/../kernel/overlay/drivers/media/artosyn/vendor-tables/ar-isp-blob.h"
+  [ -f "$ISP_BLOB_H" ] || die "ISP tuning: $ISP_BLOB_H absent - check out the kernel submodule"
+  ISP_TUNING_SIZE=$(sed -n 's/^#define[[:space:]]\+AR_ISP_TUNING_SIZE[[:space:]]\+\(0x[0-9a-fA-F]\+\).*/\1/p' "$ISP_BLOB_H")
+  [ -n "$ISP_TUNING_SIZE" ] || die "ISP tuning: no AR_ISP_TUNING_SIZE in $ISP_BLOB_H"
+  ISP_TUNING_SIZE=$((ISP_TUNING_SIZE))
+
   ISP_TUNING_SRC="$VENDOR_BLOBS/$ISP_TUNING"
   if [ ! -f "$ISP_TUNING_SRC" ]; then
-    die "ISP tuning: $ISP_TUNING_SRC absent - the ISP would run unconfigured and the picture would be garbage with no error anywhere; fetch it with glue/fetch/fetch-vendor-blobs.sh"
+    die "ISP tuning: $ISP_TUNING_SRC absent - fetch it with glue/fetch/fetch-vendor-blobs.sh"
   fi
 
   if [ "$(stat -c %s "$ISP_TUNING_SRC")" != "$ISP_TUNING_SIZE" ]; then
-    die "ISP tuning: $ISP_TUNING_SRC is $(stat -c %s "$ISP_TUNING_SRC") bytes, expected $ISP_TUNING_SIZE - ar-isp would reject it and run unconfigured"
+    die "ISP tuning: $ISP_TUNING_SRC is $(stat -c %s "$ISP_TUNING_SRC") bytes, expected $ISP_TUNING_SIZE"
   fi
 
   stage "$ISP_TUNING_SRC" "lib/firmware/artosyn/$ISP_TUNING_NAME" \
