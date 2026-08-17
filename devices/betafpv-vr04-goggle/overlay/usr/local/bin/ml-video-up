@@ -64,6 +64,16 @@ done
 [ -f /usrdata/missinglynk/latraw ] && export ML_LATRAW=1
 # dvr-h264: record DVR in H.264 instead of the default H.265 (mlp-record.c ML_DVR_CODEC)
 [ -f /usrdata/missinglynk/dvr-h264 ] && export ML_DVR_CODEC=h264
+# seam: how the 32 rows the two RF tiles both carry are resolved (mlp-seam.c ML_SEAM). File
+# contents select the mode, an empty file meaning 2:
+#   1  split geometry - each tile skips its own overlap rows at the source, so no composite row
+#      is written twice; the tiles still meet at a hard cut
+#   2  split geometry plus the NEON cross-fade over the band
+# Absent: tile 1 is placed over tile 0's copy of those rows, the long-standing behaviour.
+if [ -f /usrdata/missinglynk/seam ]; then
+    seam=$(cat /usrdata/missinglynk/seam)
+    export ML_SEAM="${seam:-2}"
+fi
 # pace: file contents = seed rate in Hz for the phase servo (empty file = start from boot rate)
 if [ -f /usrdata/missinglynk/pace ]; then
     seed=$(cat /usrdata/missinglynk/pace)
