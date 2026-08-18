@@ -71,13 +71,26 @@ start() {
 		ewarn "ml-air-ae: $STATS carries no frame after ${STATS_WAIT}s - starting anyway, ml-aed will wait"
 	fi
 
-	einfo "ml-air-ae: metering from $STATS, starting at index $START_INDEX"
+	# banding: mains anti-flicker. File contents select the mode, an empty file meaning 50.
+	#   50  snap the exposure to a whole number of 50 Hz half-periods
+	#   60  the same for 60 Hz
+	# Absent: no flicker constraint, which is what the vendor also ships. Correcting costs light,
+	# 0.74 stops at 50 Hz and more than the sensor has at the bottom of the exposure table, so it
+	# is opt-in rather than on by default.
+	BANDING=0
+
+	if [ -f /usrdata/missinglynk/banding ]; then
+		BANDING=$(cat /usrdata/missinglynk/banding)
+		BANDING="${BANDING:-50}"
+	fi
+
+	einfo "ml-air-ae: metering from $STATS, starting at index $START_INDEX, banding $BANDING"
 
 	# Non-verbose: only index moves are logged, which fits the 8 MiB /var/log tmpfs.
 	start-stop-daemon --start --background --make-pidfile \
 		--pidfile "$PIDFILE" --exec "$AED" \
 		--stdout "$LOG" --stderr "$LOG" \
-		-- --start-index "$START_INDEX" --tuning "$TUNING"
+		-- --start-index "$START_INDEX" --banding "$BANDING" --tuning "$TUNING"
 
 	eend 0
 }
