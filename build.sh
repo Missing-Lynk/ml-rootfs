@@ -398,32 +398,34 @@ fi
 # AR8030 baseband image + merged config, request_firmware()d by artosyn_sdio (insmod
 # fw_name=/cfg_name=) and uploaded to the chip by the ROM loader. Baked in at the default search
 # path so a flashed image needs no host push; the reset + insmod sequence stays in ml-rf-bringup.
-# RF_ROLE picks the set, and each device carries only its own.
-#
+# RF_ROLE picks the set, and each device carries only its own; RF_ROLE is validated air|ground
+# above, so this case is exhaustive.
+case "$RF_ROLE" in
+  air)
+    RF_FW="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_demo_air_d.img"
+    RF_CFG="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_config_air.json"
+    RF_FW_DST="lib/firmware/bb_demo_air_d.img"
+    RF_CFG_DST="lib/firmware/bb_config_air.json"
+    ;;
+  ground)
+    RF_FW="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_demo_gnd_d.img"
+    RF_CFG="$VENDOR_BLOBS/tmp/ar813x/bb_config_gnd.json.usr_cfg.json"
+    RF_FW_DST="lib/firmware/bb_demo_gnd_d.img"
+    RF_CFG_DST="lib/firmware/bb_config_gnd.json.usr_cfg.json"
+    ;;
+esac
+
 # Paired: the driver needs image and config together, so half a set stages as none.
-if [ "$RF_ROLE" = "air" ]; then
-  RF_FW="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_demo_air_d.img"
-  RF_CFG="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_config_air.json"
-  if [ -f "$RF_FW" ] && [ -f "$RF_CFG" ]; then
-    stage "$RF_FW"  lib/firmware/bb_demo_air_d.img  --tag "RF firmware" --mode 0644
-    stage "$RF_CFG" lib/firmware/bb_config_air.json --tag "RF firmware" --mode 0644
-  else
-    log "RF firmware: $RF_FW / $RF_CFG absent; air RF bring-up will need them pushed at runtime"
-  fi
-fi
+if [ -f "$RF_FW" ] && [ -f "$RF_CFG" ]; then
+  stage "$RF_FW"  "$RF_FW_DST"  --tag "RF firmware" --mode 0644
+  stage "$RF_CFG" "$RF_CFG_DST" --tag "RF firmware" --mode 0644
 
-if [ "$RF_ROLE" = "ground" ]; then
-  RF_FW="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_demo_gnd_d.img"
-  RF_CFG="$VENDOR_BLOBS/tmp/ar813x/bb_config_gnd.json.usr_cfg.json"
-  if [ -f "$RF_FW" ] && [ -f "$RF_CFG" ]; then
-    stage "$RF_FW"  lib/firmware/bb_demo_gnd_d.img               --tag "RF firmware" --mode 0644
-    stage "$RF_CFG" lib/firmware/bb_config_gnd.json.usr_cfg.json --tag "RF firmware" --mode 0644
-
-    # Band = chan_valid_bmp, which only enters the chip at firmware upload, so each band is a
-    # whole blob and switching costs a boot. The captured config is race (0x0007FFF8, table
-    # indices 3..18); rewrite that one field for normal (0x00000007 = 5758/5788/5828). ml-video
-    # picks between them at boot. The grep is load-bearing: an unrewritten copy is a race blob
-    # shipped as the normal band.
+  # Ground carries a second, normal-band config derived from the captured one. Band =
+  # chan_valid_bmp, which only enters the chip at firmware upload, so each band is a whole blob
+  # and switching costs a boot. The captured config is race (0x0007FFF8, table indices 3..18);
+  # rewrite that one field for normal (0x00000007 = 5758/5788/5828). ml-video picks between them
+  # at boot. The grep is load-bearing: an unrewritten copy is a race blob shipped as the normal band.
+  if [ "$RF_ROLE" = "ground" ]; then
     sed 's/"chan_valid_bmp":\([[:space:]]*\)"0x0007FFF8"/"chan_valid_bmp":\1"0x00000007"/I' \
         "$RF_CFG" > "$STAGE/lib/firmware/bb_config_gnd.json.normal_cfg.json"
     if ! grep -qi '"chan_valid_bmp":[[:space:]]*"0x00000007"' \
@@ -432,9 +434,9 @@ if [ "$RF_ROLE" = "ground" ]; then
     fi
 
     log "RF firmware: staged normal-band config -> /lib/firmware/"
-  else
-    log "RF firmware: $RF_FW / $RF_CFG absent; RF bring-up will push them at runtime (glue/dev/rf-bringup.sh -> /run/ml/fw)"
   fi
+else
+  log "RF firmware: $RF_FW / $RF_CFG absent; RF bring-up will push them at runtime (glue/dev/rf-bringup.sh -> /run/ml/fw)"
 fi
 
 # --------------------------------------------------------------------------------------
