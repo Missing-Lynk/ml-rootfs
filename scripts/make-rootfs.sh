@@ -6,6 +6,16 @@
 # paths, and the NAND/UBI geometry); see build.sh for their definitions.
 set -euo pipefail
 
+# Fail loudly at the seam if build.sh's export list ever drifts from what this script reads.
+# Without this, a missing input surfaces as a bare "unbound variable" deep inside the build
+# under `set -u`, with no name. Each entry here is a variable build.sh must export non-empty;
+# keep this list in step with that export. MODULES_STAGE and the ML_* identity vars are
+# deliberately absent: they are read with defaults (${VAR:-...}) and may legitimately be empty.
+: "${APK_STATIC:?}" "${KEYS:?}" "${ROOT:?}" "${MAIN_REPO:?}" "${COMMUNITY_REPO:?}" \
+  "${PACKAGES:?}" "${STAGE:?}" "${ROOT_HASH:?}" "${MKFS_UBIFS:?}" "${UBINIZE:?}" \
+  "${UBIFS_IMG:?}" "${UBI_IMG:?}" "${UBINIZE_CFG:?}" "${MIN_IO:?}" "${LEB_SIZE:?}" \
+  "${MAX_LEB_COUNT:?}" "${PEB_SIZE:?}" "${SUBPAGE:?}" "${FLAVOR:?}" "${DEV:?}"
+
 rm -rf "$ROOT"
 mkdir -p "$ROOT"
 
