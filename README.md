@@ -59,7 +59,7 @@ The positional arg selects `devices/<name>/board.conf` and `devices/<name>/overl
 
 The build prints installed packages, module count and image size, and fails if the image exceeds the device profile's partition size. Flash `slim` for production.
 
-Static rootfs files live under `skeleton/`; device overlays layer on top. `build.sh` templates the few files with per-device values, then `scripts/make-rootfs.sh` assembles the final tree under `fakeroot`.
+Static rootfs files live under `skeleton/`; device overlays layer on top. `build.sh` validates the profile and fetches the pinned Alpine inputs, sources `scripts/stage-payload.sh` to stage the tree, then runs `scripts/make-rootfs.sh` under `fakeroot` to build and image it.
 
 ### Kernel modules
 
@@ -67,13 +67,13 @@ If `../kernel/modules/build.sh` has staged modules, `build.sh` copies them into 
 
 ### Staged firmware and binaries
 
-`build.sh` bakes required proprietary blobs into `/lib/firmware` from `../firmware/bin/slot-a/` (populate it from your own device with `../glue/fetch/fetch-vendor-blobs.sh`):
+`scripts/stage-payload.sh` (sourced by `build.sh`) bakes required proprietary blobs into `/lib/firmware` from `../firmware/bin/slot-a/` (populate it from your own device with `../glue/fetch/fetch-vendor-blobs.sh`):
 
 - **Codec firmware** - `chagall.bin` as `cnm/wave521c_k3_codec_fw.bin`, which `wave5.ko` requests on load.
 - **RF baseband firmware** - the AR8030 image and config for this device's `RF_ROLE`.
 - **ISP tuning blob** - air unit only; missing or wrong-sized tuning is fatal.
 
-Open-stack binaries are staged into `/usr/local/bin` from the sibling trees. Role-critical binaries are required; convenience and diagnostic helpers are staged when present. `build.sh` is the authoritative staging list, and each entry names the command that builds it.
+Open-stack binaries are staged into `/usr/local/bin` from the sibling trees. Role-critical binaries are required; convenience and diagnostic helpers are staged when present. `scripts/stage-payload.sh` is the authoritative staging list, and each entry names the command that builds it.
 
 `make-rootfs.sh` also fails if `/usr/local/lib/ml-sd.sh` is missing, because SD mount and format share that selector.
 
@@ -117,8 +117,8 @@ The same device name is used here, by the root `Makefile`, and by `kernel/device
 
 A board that reuses existing services needs nothing beyond those three steps. Two cases go further:
 
-- **A new service name** needs a runlevel link in `scripts/make-rootfs.sh`.
-- **Staging that no flag can express** - a new firmware blob, or a binary no current board uses - needs a `build.sh` change. Anything a `HAS_*` flag or `RF_ROLE` already covers does not: the build branches on capability, never on device name.
+- **A new service name** needs an entry in the `BOOT_SERVICES` or `DEFAULT_SERVICES` list in `scripts/make-rootfs.sh`; run order comes from the service's own `depend()`, not from that list.
+- **Staging that no flag can express** - a new firmware blob, or a binary no current board uses - needs a `scripts/stage-payload.sh` change. Anything a `HAS_*` flag or `RF_ROLE` already covers does not: the build branches on capability, never on device name.
 
 Put overlay executables in `/usr/local/bin`; `make-rootfs.sh` force-sets executable bits there and on `/etc/init.d/*`.
 
