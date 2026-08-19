@@ -68,68 +68,60 @@ ML_ROOTFS_GIT="${ML_ROOTFS_GIT:-}"
 ML_BUILD_TIME="${ML_BUILD_TIME:-}"
 EOF
 
-# Enable services: gadget (provides net) in boot, dropbear + best-effort NTP in default.
-# The device has a battery-backed RTC, so the openrc `hwclock` service (boot runlevel)
-# loads it into the system clock at boot and writes it back at shutdown; ntp-oneshot then
-# corrects RTC drift when online and is a no-op offline (safe in both flavors).
-ln -sf /etc/init.d/usb-gadget "$ROOT/etc/runlevels/boot/usb-gadget"
-ln -sf /etc/init.d/dropbear   "$ROOT/etc/runlevels/default/dropbear"
-[ -e "$ROOT/etc/init.d/hwclock" ]     && ln -sf /etc/init.d/hwclock     "$ROOT/etc/runlevels/boot/hwclock"
-[ -e "$ROOT/etc/init.d/ntp-oneshot" ] && ln -sf /etc/init.d/ntp-oneshot "$ROOT/etc/runlevels/default/ntp-oneshot"
+# Enable services by symlinking each into its runlevel. Membership is all that is set
+# here; run ORDER comes from each init script's own depend() (`after ...`), so the two
+# lists below are grouped for reading, not sequenced. A service is enabled only when its
+# init script is present, so a device overlay that omits one (e.g. the air unit has no
+# ml-display, the goggle no ml-air-camera) simply never enables it. boot holds bring-up
+# that later services depend on (net, coldplug, the usr_data store, the panel); default
+# holds the login shell and the media/RF daemons.
+enable_service() {
+  local runlevel="$1"
+  local service="$2"
 
-# DT coldplug, the single module path for both flavors. mdev + hwdrivers autoload every driver with
-# a DT node (display, buttons, buzzer, temp, GPIO, wave5, SD); modules force-loads the ones without a
-# DT node or needing params (/etc/modules-load.d/ml.conf: OSD framebuffer, SDIO/SD overlay, DSI
-# panel), ordered before hwdrivers. /etc/modprobe.d/ml.conf blacklists the MPP-legacy + RF drivers.
-# The ml-* services order after this and load no modules.
-for svc in mdev hwdrivers modules; do
-  [ -e "$ROOT/etc/init.d/$svc" ] && ln -sf "/etc/init.d/$svc" "$ROOT/etc/runlevels/boot/$svc"
-done
+  if [ ! -e "$ROOT/etc/init.d/$service" ]; then
+    return 0
+  fi
 
-# Runtime hotplug: the mainline kernel has no CONFIG_UEVENT_HELPER, so the mdev service's
-# /proc/sys/kernel/hotplug helper never fires. ml-hotplugd runs `mdev -d` (netlink daemon) so post-boot
-# device events (notably SD-card insert/remove -> the mmcblk mdev rule -> ml-sdmount) are handled.
-if [ -e "$ROOT/etc/init.d/ml-hotplugd" ]; then
-  ln -sf /etc/init.d/ml-hotplugd "$ROOT/etc/runlevels/boot/ml-hotplugd"
-fi
+  ln -sf "/etc/init.d/$service" "$ROOT/etc/runlevels/$runlevel/$service"
+}
 
-# /usrdata (the usr_data UBI volume), in the boot runlevel ahead of every ml-* service: it is the
-# only persistent store, so the HUD's settings and the RF band marker are unreadable without it.
-# The kernel attaches only the rootfs UBI from the bootargs, so this service attaches usr_data too.
-if [ -e "$ROOT/etc/init.d/ml-usrdata" ]; then
-  ln -sf /etc/init.d/ml-usrdata "$ROOT/etc/runlevels/boot/ml-usrdata"
-fi
+enable_services() {
+  local runlevel="$1"
+  shift
 
-# Status LED indicator, in the boot runlevel (earlier than the default-runlevel ml-* daemons) so
-# breathe-red is one of the first signs of life. `after devfs` is enough: it needs only /run
-# (sysinit) and /dev/spidev* (built-in SPI, present once devtmpfs mounts). Best-effort, backgrounded.
-if [ -e "$ROOT/etc/init.d/ml-ledd" ]; then
-  ln -sf /etc/init.d/ml-ledd "$ROOT/etc/runlevels/boot/ml-ledd"
-fi
+  local service
+  for service in "$@"; do
+    enable_service "$runlevel" "$service"
+  done
+}
 
-# A short power-on buzzer chime, ordered after the coldplug (hwdrivers) that binds artosyn_pwm,
-# so the PWM sysfs is ready. Best-effort and backgrounded; never blocks boot.
-if [ -e "$ROOT/etc/init.d/ml-chime" ]; then
-  ln -sf /etc/init.d/ml-chime "$ROOT/etc/runlevels/default/ml-chime"
-fi
+# The stock early services (devfs/procfs/sysfs/hostname/bootmisc/sysctl/localmount) bring up
+# /proc, /sys, /dev, the hostname and the fstab mounts; sysctl applies /etc/sysctl.d/*.conf,
+# including 99-panic-reboot.conf (auto-reboot on crash).
+BOOT_SERVICES="
+  devfs procfs sysfs hostname bootmisc sysctl localmount
+  usb-gadget hwclock
+  mdev hwdrivers modules
+  ml-hotplugd ml-usrdata ml-ledd ml-display
+"
 
-# Display bring-up + boot splash, in the boot runlevel ordered after the coldplug (hwdrivers) that
-# binds VO/DSI/panel and creates card0 (~5 s). Painting the splash here rather than in the default
-# runlevel (~12 s) makes the panel's first modeset, and so its first light, happen ~7 s earlier; until
-# then the backlit panel is black. Best-effort; a missing broker/splash/asset only logs a warning.
-if [ -e "$ROOT/etc/init.d/ml-display" ]; then
-  ln -sf /etc/init.d/ml-display "$ROOT/etc/runlevels/boot/ml-display"
-fi
+DEFAULT_SERVICES="
+  dropbear ntp-oneshot
+  ml-chime ml-sdcard ml-hud ml-logd ml-watchdog ml-video
+  ml-air-link ml-air-camera ml-air-ae
+  ml-boot-record
+"
+
+# shellcheck disable=SC2086  # both lists are space/newline-separated and must word-split
+enable_services boot $BOOT_SERVICES
+# shellcheck disable=SC2086  # see above
+enable_services default $DEFAULT_SERVICES
 
 # ml-sdmount and ml-sdformat source their card selection from this library. Without it the mount
 # fails at boot and the format aborts with an unbound function, so a missing file must fail the
 # build rather than ship an image whose SD card never appears.
 [ -f "$ROOT/usr/local/lib/ml-sd.sh" ] || { echo "make-rootfs: /usr/local/lib/ml-sd.sh missing from the overlay" >&2; exit 1; }
-
-# SD card mount at /mnt/sdcard, ordered after coldplug and before ml-hud.
-if [ -e "$ROOT/etc/init.d/ml-sdcard" ]; then
-  ln -sf /etc/init.d/ml-sdcard "$ROOT/etc/runlevels/default/ml-sdcard"
-fi
 
 # Automount the microSD card on insert/remove. The SD controller has a native card-detect line, so the
 # kernel fires mmcblk hotplug uevents; the stock mdev.conf only runs persistent-storage on them (no
@@ -140,46 +132,6 @@ if [ -e "$ROOT/etc/mdev.conf" ] && ! grep -q ml-sdmount "$ROOT/etc/mdev.conf"; t
   sed -i '/^mmcblk\.\*/i mmcblk[0-9].* root:disk 0660 */usr/local/bin/ml-sdmount' "$ROOT/etc/mdev.conf"
 fi
 
-# HUD autostart, ordered after ml-display (DRM broker + modeset).
-if [ -e "$ROOT/etc/init.d/ml-hud" ]; then
-  ln -sf /etc/init.d/ml-hud "$ROOT/etc/runlevels/default/ml-hud"
-fi
-
-# Session logger, ordered after ml-sdcard (needs /mnt/sdcard); skips cleanly if the card is absent.
-if [ -e "$ROOT/etc/init.d/ml-logd" ]; then
-  ln -sf /etc/init.d/ml-logd "$ROOT/etc/runlevels/default/ml-logd"
-fi
-
-# RF video autostart: AR8030 bring-up + ml-linkd + ml-pipeline, ordered after ml-display.
-if [ -e "$ROOT/etc/init.d/ml-video" ]; then
-  ln -sf /etc/init.d/ml-video "$ROOT/etc/runlevels/default/ml-video"
-fi
-
-# Air-unit RF link autostart: ml-linkd in air (TX) role for telemetry. Present only in the air
-# device overlay (the goggle uses ml-video instead), so this enables nothing on the goggle.
-if [ -e "$ROOT/etc/init.d/ml-air-link" ]; then
-  ln -sf /etc/init.d/ml-air-link "$ROOT/etc/runlevels/default/ml-air-link"
-fi
-
-# Air-unit camera video autostart: ar-cvisp -> two H.265 tiles -> goggle, ordered after
-# ml-air-link. Present only in the air device overlay, so this enables nothing on the goggle.
-if [ -e "$ROOT/etc/init.d/ml-air-camera" ]; then
-  ln -sf /etc/init.d/ml-air-camera "$ROOT/etc/runlevels/default/ml-air-camera"
-fi
-
-# Air-unit auto exposure autostart: meters the ISP statistics grid and drives the sensor and the
-# gain-keyed ISP ladders, ordered after ml-air-camera. Present only in the air device overlay, so
-# this enables nothing on the goggle. Without it the camera streams at a fixed operating point.
-if [ -e "$ROOT/etc/init.d/ml-air-ae" ]; then
-  ln -sf /etc/init.d/ml-air-ae "$ROOT/etc/runlevels/default/ml-air-ae"
-fi
-
-# Boot-count recorder, ordered after the usable-unit services (its depend()); marks a healthy boot
-# in the per-unit device record. Best-effort; skips cleanly if /usrdata or the binary is absent.
-if [ -e "$ROOT/etc/init.d/ml-boot-record" ]; then
-  ln -sf /etc/init.d/ml-boot-record "$ROOT/etc/runlevels/default/ml-boot-record"
-fi
-
 # OpenRC silently skips a non-executable init script (a stripped exec bit -> the service
 # never runs and boot looks fine); force +x on every init script so that can't happen.
 chmod +x "$ROOT"/etc/init.d/* 2>/dev/null || true
@@ -188,13 +140,6 @@ chmod +x "$ROOT"/etc/init.d/* 2>/dev/null || true
 # file, and OpenRC still reports the service "started" (the exec fails in the backgrounded child).
 # Force +x on everything under /usr/local/bin so a 644 helper can't silently no-op a service.
 chmod +x "$ROOT"/usr/local/bin/* 2>/dev/null || true
-
-# Standard early services so /proc, /sys, /dev, hostname, fstab mounts come up.
-# `sysctl` applies /etc/sysctl.d/*.conf (incl. our 99-panic-reboot.conf -> auto-reboot on crash).
-for svc in devfs procfs sysfs hostname bootmisc sysctl; do
-  [ -e "$ROOT/etc/init.d/$svc" ] && ln -sf "/etc/init.d/$svc" "$ROOT/etc/runlevels/boot/$svc"
-done
-[ -e "$ROOT/etc/init.d/localmount" ] && ln -sf /etc/init.d/localmount "$ROOT/etc/runlevels/boot/localmount"
 
 # Drop the apk index cache (--update-cache populated it, ~3 MB of APKINDEX). Build-only; on this
 # near-full NAND every megabyte in the image counts.
