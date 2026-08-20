@@ -8,8 +8,8 @@
 #
 # Design is deliberately cheap: `cat /dev/kmsg` is a blocking read (0% CPU when the kernel is quiet,
 # one open fd, no polling); the sampler wakes every SAMPLE seconds, reads pseudo-files with shell
-# builtins (no grep/awk fork), and appends one line. No global sync - the kernel's dirty writeback
-# flushes our tiny files on its own schedule, so we never contend with the DVR writing the same card.
+# builtins (no grep/awk fork), and appends one line. Each tick ends with an fsync of the files it
+# wrote; a whole-filesystem sync would also flush the DVR writing the same card.
 #
 # Correlate the three streams (kernel.log timestamps, stats.csv uptime_s, ml-linkd's rf.log uptime)
 # on the shared CLOCK_MONOTONIC axis - they line up even before ntp sets wall time.
@@ -79,7 +79,9 @@ echo "$SDIR" > /run/ml-log.dir 2>/dev/null
 
 KERN="$SDIR/kernel.log"
 STATS="$SDIR/stats.csv"
+THREADS="$SDIR/threads.csv"
 KPID=""
+DIRTY=""      # paths written this tick, fsync'd by sync_dirty
 
 # Opening /dev/kmsg positions at the OLDEST record still in the ring, so every call after the first
 # re-appends the whole ring buffer. Rotation avoids that by truncating in place instead of
@@ -92,12 +94,46 @@ start_kmsg() {
 }
 
 # Mirror the live service logs (tmpfs /var/log, wiped on reboot) into the session dir, so the SD
-# archive is self-contained and survives a power cycle. Cheap: the daemons are quiet, so the files
-# stay small and the periodic copy is trivial. Runs on each sample tick and once more on the way out.
+# archive is self-contained and survives a power cycle. Runs on each sample tick and once more on
+# the way out. Only the bytes appended since the previous tick are copied, with the per-file
+# position held in a MIRROR_<key> variable and the byte count pinned before the read, so a service
+# writing while the copy runs neither loses a record nor gets one mirrored twice.
+#
+# ml-pipeline under ML_LATRAW=1 writes ~90 bytes per flip, so its log passes 3 MB within the hour.
+# Appending keeps each tick's write proportional to what was logged rather than to the file size,
+# which is what lets the fsync below complete inside the tick.
 mirror_logs() {
 	for f in /var/log/*.log; do
-		[ -f "$f" ] && cp "$f" "$SDIR/" 2>/dev/null
+		[ -f "$f" ] || continue
+		base="${f##*/}"
+		key=$(printf '%s' "$base" | tr -c 'a-zA-Z0-9' '_')   # POSIX sh: no ${var//pat/rep}
+		eval "off=\${MIRROR_$key:-0}"
+		size=$(stat -c %s "$f" 2>/dev/null) || continue
+
+		# The source shrank: reclaim_var_log truncated it, or the service restarted and reopened it
+		# with O_TRUNC. What was mirrored before stays in the session copy and the mirror resumes
+		# from the new start, with the seam marked.
+		if [ "$size" -lt "$off" ]; then
+			echo "--- ml-logd: /var/log/$base restarted (was $off bytes), mirror resumes below ---" >> "$SDIR/$base"
+			off=0
+		fi
+
+		[ "$size" -gt "$off" ] || continue
+		tail -c "+$((off + 1))" "$f" 2>/dev/null | head -c "$((size - off))" >> "$SDIR/$base"
+		eval "MIRROR_$key=$size"
+		DIRTY="$DIRTY $SDIR/$base"
 	done
+}
+
+# fsync the files this tick wrote, so the card holds the session up to the last tick after a power
+# cut or a wedge; dirty writeback on its own expires at 30 s. The list is per file: a
+# whole-filesystem sync would also flush the DVR writing the same card. These are appends, so they
+# need the metadata flush that -d skips - without the new size on the card the appended bytes are
+# unreachable.
+sync_dirty() {
+	# shellcheck disable=SC2086  # $DIRTY is a deliberately word-split list of paths
+	sync "$STATS" "$THREADS" "$KERN" $DIRTY 2>/dev/null
+	DIRTY=""
 }
 
 # /var/log is an 8 MiB tmpfs and the service logs append to it for the whole session, so a long or
@@ -123,6 +159,7 @@ reclaim_var_log() {
 
 cleanup() {
 	mirror_logs
+	sync_dirty
 	[ -n "$KPID" ] && kill "$KPID" 2>/dev/null
 	rm -f /run/ml-log.dir 2>/dev/null
 	exit 0
@@ -136,7 +173,6 @@ echo "uptime_s,mem_free_kb,mem_avail_kb,cma_free_kb,cma_total_kb,load1" > "$STAT
 # CUMULATIVE utime+stime jiffies and its instantaneous state; the host-side report script does
 # the deltas and percentages. A "_cpu" row carries the machine-wide busy/total jiffies from
 # /proc/stat for normalisation. All reads are shell builtins on /proc, no forks.
-THREADS="$SDIR/threads.csv"
 echo "uptime_s,proc,tid,tname,state,jiffies" > "$THREADS"
 ENVDONE=""
 
@@ -206,6 +242,7 @@ while : ; do
 
 	mirror_logs
 	reclaim_var_log
+	sync_dirty
 
 	# Restart the kmsg follower if it died (heavy spew can EPIPE a slow reader).
 	if [ -n "$KPID" ] && ! kill -0 "$KPID" 2>/dev/null; then
