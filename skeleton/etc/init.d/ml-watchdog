@@ -1,0 +1,46 @@
+#!/sbin/openrc-run
+# Hardware watchdog petting: arms the SoC's dw-wdt through /dev/watchdog and writes to it every
+# PET_S seconds, so the board resets by itself if the kernel stops scheduling.
+#
+# The reset is the only recovery path this board has for a CPU-side hang: CONFIG_MAGIC_SYSRQ and
+# the NMI hard-lockup detector are both off, so a kernel that stops servicing interrupts answers
+# nothing on the network, prints nothing to the console, and holds the last scanned-out frame on
+# the panel.
+#
+# CONFIG_WATCHDOG_NOWAYOUT is off, so the daemon's magic-close on TERM disarms the timer and
+# `rc-service ml-watchdog stop` leaves the board unguarded rather than on a countdown.
+description="Hardware watchdog: reset the board if the kernel stops scheduling"
+
+WDT=/dev/watchdog
+WATCHDOG=/sbin/watchdog
+PIDFILE=/run/ml-watchdog.pid
+
+# The driver clamps TIMEOUT_S to what the dw-wdt's counter can express at its clock, so the value
+# in force after arming is whatever it rounded to. Petting is well inside that either way.
+PET_S="${PET_S:-5}"
+TIMEOUT_S="${TIMEOUT_S:-30}"
+
+start() {
+	ebegin "Arming hardware watchdog (pet ${PET_S}s, reset ${TIMEOUT_S}s)"
+
+	if [ ! -c "$WDT" ]; then
+		ewarn "ml-watchdog: $WDT missing; skipping"
+		eend 0
+		return 0
+	fi
+
+	# -F keeps busybox watchdog in the foreground so start-stop-daemon owns the backgrounding and
+	# the pidfile names the process that holds the timer open.
+	start-stop-daemon --start --background --make-pidfile --pidfile "$PIDFILE" \
+		--exec "$WATCHDOG" -- -F -t "$PET_S" -T "$TIMEOUT_S" "$WDT"
+
+	eend $?
+}
+
+stop() {
+	# SIGTERM so busybox watchdog writes the magic 'V' close that disarms the timer; killing it
+	# with anything else leaves the board resetting TIMEOUT_S later.
+	ebegin "Disarming hardware watchdog"
+	start-stop-daemon --stop --signal TERM --pidfile "$PIDFILE" 2>/dev/null
+	eend 0
+}
