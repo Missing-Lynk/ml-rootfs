@@ -14,6 +14,18 @@ RF_CHAN_MARKER=/usrdata/missinglynk/rf-channel  # per-band saved channel; passed
 LINKD=/usr/local/bin/ml-linkd
 VIDEO_UP=/usr/local/bin/ml-video-up
 
+# ml-pipeline runs under supervise-daemon: a crash (wave5 firmware stall, a segfault, an OOM'd
+# allocation) is respawned after RESPAWN_DELAY seconds, and the next generation reclaims the
+# crashed one's compose pool before allocating its own, so the respawn succeeds. Without this a
+# crash left the unit with OSD alive and video black until someone restarted ml-video. Bounded so a
+# pipeline that cannot start at all (no DRM broker, no link) does not spin forever: more than
+# RESPAWN_MAX starts within RESPAWN_PERIOD seconds and the supervisor gives up and marks the service
+# crashed. ml-linkd stays under start-stop-daemon: its restart drops the power/standby assert and
+# is never wanted implicitly.
+RESPAWN_DELAY="${RESPAWN_DELAY:-2}"
+RESPAWN_MAX="${RESPAWN_MAX:-100}"
+RESPAWN_PERIOD="${RESPAWN_PERIOD:-600}"
+
 depend() {
 	after modules mdev hwdrivers ml-display
 }
@@ -69,10 +81,13 @@ start() {
 	fi
 
 	if [ -x "$VIDEO_UP" ]; then
-		start-stop-daemon --start --background --make-pidfile \
+		# The pidfile names the supervisor; the pipeline itself is found by comm (pgrep).
+		supervise-daemon "$RC_SVCNAME" --start \
 			--pidfile /run/ml-pipeline.pid \
+			--respawn-delay "$RESPAWN_DELAY" --respawn-max "$RESPAWN_MAX" \
+			--respawn-period "$RESPAWN_PERIOD" \
 			--stdout /var/log/ml-pipeline.log --stderr /var/log/ml-pipeline.log \
-			--exec "$VIDEO_UP" -- rf
+			"$VIDEO_UP" -- rf
 	else
 		ewarn "ml-video: $VIDEO_UP missing"
 	fi
@@ -82,7 +97,8 @@ start() {
 
 stop() {
 	ebegin "Stopping RF video (link/driver stay up - never warm-reload artosyn_sdio)"
-	start-stop-daemon --stop --pidfile /run/ml-pipeline.pid 2>/dev/null
+	# Through the supervisor, so it stops respawning and TERMs the pipeline (graceful teardown).
+	supervise-daemon "$RC_SVCNAME" --stop --pidfile /run/ml-pipeline.pid 2>/dev/null
 	start-stop-daemon --stop --pidfile /run/ml-linkd.pid 2>/dev/null
 	eend 0
 }
