@@ -144,10 +144,10 @@ done
 # The role branches are per-role with no fallback, so an unrecognised value would produce an
 # image with no baseband firmware and no role binaries.
 case "$RF_ROLE" in
-  air|ground)
+  air|gnd)
     ;;
   *)
-    die "device config $DEVICE_CONF: RF_ROLE='$RF_ROLE' (air|ground)"
+    die "device config $DEVICE_CONF: RF_ROLE='$RF_ROLE' (air|gnd)"
     ;;
 esac
 
@@ -178,8 +178,14 @@ if [ -n "$MODULES_STAGE" ] && [ -d "$MODULES_STAGE/lib/modules" ]; then
   # stale or built for a no-display kernel lacks the DRM stack, and the panel then stays dark
   # with no visible cause (the failure that motivated this guard). Only enforced when a stage is
   # present AND this device has a panel; a deliberately module-less build still logs and skips
-  # above. `make kernel` also asserts this stage-side (kernel/modules/stage.sh), so this is the
-  # belt-and-braces net for the case where rootfs is rebuilt against a pre-existing bad stage.
+  # above.
+  #
+  # This coexists with the stage-side assert in kernel/modules/stage.sh on purpose; the two fire
+  # at different times against different inputs. stage.sh runs during `make kernel`, keyed on the
+  # kernel .config (CONFIG_DRM_ARTOSYN), and catches a kernel built without the display stack.
+  # This one runs during a rootfs build, keyed on the device profile (HAS_DISPLAY), and is the
+  # only check that fires when the rootfs is rebuilt alone against a stage produced by an earlier,
+  # stale, or no-display kernel build. Keep both; deleting either loses one of those two triggers.
   if [ "$HAS_DISPLAY" = 1 ]; then
     for ko in artosyn_vo.ko drm.ko; do
       find "$MODULES_STAGE/lib/modules" -name "$ko" | grep -q . \

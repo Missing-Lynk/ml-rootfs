@@ -135,7 +135,7 @@ fi
 # AR8030 baseband image + merged config, request_firmware()d by artosyn_sdio (insmod
 # fw_name=/cfg_name=) and uploaded to the chip by the ROM loader. Baked in at the default search
 # path so a flashed image needs no host push; the reset + insmod sequence stays in ml-rf-bringup.
-# RF_ROLE picks the set, and each device carries only its own; RF_ROLE is validated air|ground
+# RF_ROLE picks the set, and each device carries only its own; RF_ROLE is validated air|gnd
 # above, so this case is exhaustive.
 case "$RF_ROLE" in
   air)
@@ -144,7 +144,7 @@ case "$RF_ROLE" in
     RF_FW_DST="lib/firmware/bb_demo_air_d.img"
     RF_CFG_DST="lib/firmware/bb_config_air.json"
     ;;
-  ground)
+  gnd)
     RF_FW="$VENDOR_BLOBS/usr/usrdata/ar813x/bb_demo_gnd_d.img"
     RF_CFG="$VENDOR_BLOBS/tmp/ar813x/bb_config_gnd.json.usr_cfg.json"
     RF_FW_DST="lib/firmware/bb_demo_gnd_d.img"
@@ -162,7 +162,7 @@ if [ -f "$RF_FW" ] && [ -f "$RF_CFG" ]; then
   # and switching costs a boot. The captured config is race (0x0007FFF8, table indices 3..18);
   # rewrite that one field for normal (0x00000007 = 5758/5788/5828). ml-video picks between them
   # at boot. The grep is load-bearing: an unrewritten copy is a race blob shipped as the normal band.
-  if [ "$RF_ROLE" = "ground" ]; then
+  if [ "$RF_ROLE" = "gnd" ]; then
     sed 's/"chan_valid_bmp":\([[:space:]]*\)"0x0007FFF8"/"chan_valid_bmp":\1"0x00000007"/I' \
         "$RF_CFG" > "$STAGE/lib/firmware/bb_config_gnd.json.normal_cfg.json"
     if ! grep -qi '"chan_valid_bmp":[[:space:]]*"0x00000007"' \
@@ -272,7 +272,7 @@ stage_req "$HERE/../native/build/ml-rf-persist" usr/local/bin/ml-rf-persist \
   --tag video --strip --hint "native/build.sh" \
   --why "bind persistence silently degrades without it"
 
-if [ "$RF_ROLE" = "ground" ]; then
+if [ "$RF_ROLE" = "gnd" ]; then
   # Sends the HUD's own RF commands (channel, scan, bind) from a shell, so those paths are
   # reachable without the UI.
   stage "$US/build/ml-rfcmd" usr/local/bin/ml-rfcmd \
