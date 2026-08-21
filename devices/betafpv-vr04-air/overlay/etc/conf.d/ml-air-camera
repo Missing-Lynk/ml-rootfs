@@ -1,0 +1,11 @@
+# Air-unit camera video options. Sourced by /etc/init.d/ml-air-camera.
+#
+# BITRATE is the per-tile encoder bitrate in bits per second, and there are two tiles, so the
+# link carries twice this. Empty leaves ml-air-video on its own default of 4000000, which is half
+# the vendor's 8000 kbps no-link total and the value every camera-to-goggle run so far was
+# measured at.
+#
+# This is the session's bitrate when /etc/conf.d/ml-air-link has RATE_MODE=fixed. Under
+# RATE_MODE=adapt it is only the value the encoder opens with: the first MCS sample replaces it,
+# and the link owns it from then on.
+BITRATE=

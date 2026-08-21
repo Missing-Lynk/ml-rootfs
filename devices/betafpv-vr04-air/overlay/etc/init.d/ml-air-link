@@ -20,6 +20,10 @@ RF_ATTEMPTS=2
 RF_RETRY_WAIT=2
 LINKD=/usr/local/bin/ml-linkd
 
+# Where the encoder bitrate comes from: fixed, adapt or probe. Set in /etc/conf.d/ml-air-link,
+# which OpenRC sources before this runs; the default here is what an image without that file gets.
+RATE_MODE="${RATE_MODE:-adapt}"
+
 depend() {
 	after modules mdev hwdrivers
 }
@@ -91,11 +95,28 @@ start() {
 	# stages both binaries from the same userspace tree so a flashed image is always a matched
 	# pair; a HAND-DEPLOYED ml-linkd over an older ml-air-video is not, and fails silently in one
 	# direction only - power drops, bitrate does not.
+	#
+	# RATE_MODE past fixed hands the encoder bitrate to the link: adapt writes it, probe only
+	# derives and logs it, sim writes it from a bench profile file instead of the baseband. An
+	# unrecognised value runs fixed rather than guessing, and says so, because the difference is
+	# invisible in flight and visible only here.
+	set -- --role air --hw-version "@HW_VERSION@" --power-adapt
+	case "$RATE_MODE" in
+		fixed) ;;
+		adapt) set -- "$@" --rate-adapt ;;
+		probe) set -- "$@" --rate-probe ;;
+		sim)   set -- "$@" --rate-sim ;;
+		*)
+			ewarn "ml-air-link: RATE_MODE=$RATE_MODE unrecognised, running fixed"
+			;;
+	esac
+
 	if [ -x "$LINKD" ]; then
+		einfo "ml-air-link: encoder bitrate $RATE_MODE"
 		start-stop-daemon --start --background --make-pidfile \
 			--pidfile /run/ml-linkd.pid --exec "$LINKD" \
 			--stdout /var/log/ml-linkd.log --stderr /var/log/ml-linkd.log \
-			-- --role air --hw-version "@HW_VERSION@" --power-adapt
+			-- "$@"
 	else
 		ewarn "ml-air-link: $LINKD missing"
 	fi

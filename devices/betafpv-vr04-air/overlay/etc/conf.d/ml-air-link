@@ -1,0 +1,34 @@
+# Air-unit RF link options. Sourced by /etc/init.d/ml-air-link.
+#
+# RATE_MODE decides where the encoder bitrate comes from for the whole session.
+#
+#   fixed   ml-air-video holds one bitrate for the session, BITRATE in
+#           /etc/conf.d/ml-air-camera (its own default is 4000000 bps per tile).
+#   adapt   ml-linkd derives the bitrate from the RF link and pushes it to the encoder as the
+#           link moves, which is what the vendor air unit does.
+#   probe   the same derivation, logged to /var/log/ml-linkd.log and never written. Use this to
+#           watch what adapt would command before letting it command anything.
+#   sim     adapt, with the sample read from /run/missinglynk/rate-sim instead of the baseband,
+#           one line of `<mcs> <throughput_kbps>` re-read every 200 ms. A bench link sits at one
+#           operating point or at none, and on a dead link the derivation returns the same rate
+#           we ship fixed, so a bench run against a real radio cannot tell a working governor
+#           from a dead one. This drives it from a profile instead; glue/dev/au-rate-sim.sh
+#           plays one. The baseband is never opened in this mode.
+#
+# The derivation is the vendor's AR_8030_TX_GetBitRate: throughput * 0.7, capped at 20000 kbps,
+# 8000 kbps when the link reports no throughput, halved across the two tiles. It drops fast and
+# rises slowly (one second of settling before a rise). Our fixed 4000000 bps per tile is exactly
+# the vendor's no-link fallback, so the two agree on a dead link and diverge once one is up: on
+# the one healthy link measured here, the derivation asked for 14630 kbps against an actual
+# 7.84 Mbps downlink. Below about 11400 kbps of throughput it asks for less than fixed does, so
+# this is a governor and not a bitrate increase.
+#
+# Default adapt, because it is what the vendor air unit does: it derives the encoder rate from the
+# link on every modulation-index change and has no fixed-rate mode at all. Holding one bitrate for
+# a session is the deviation, and it is kept reachable for measurements that need the rate pinned.
+#
+# Validated end to end on hardware 2026-08-21, against a goggle forcing the index: at MCS 3 the
+# chip reported 5215 kbps and the encoder took 1820000 bps/tile, at MCS 10 it reported 20926 kbps
+# and the encoder took 7315000, with the drop applied on arrival and the rise held for the settle
+# window first.
+RATE_MODE=adapt
