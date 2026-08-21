@@ -62,6 +62,11 @@ done
 # and removes the file when done.
 [ -f /usrdata/missinglynk/latstats ] && export ML_LATSTATS=1
 [ -f /usrdata/missinglynk/latraw ] && export ML_LATRAW=1
+# pmsg: write a per-frame phase trail to /dev/pmsg0 (mlp-pmsg.c ML_PMSG), which is DRAM that
+# survives the watchdog reset a freeze ends in. Needs a kernel built with the debug-freeze
+# fragment; without one ml-pipeline says so and carries on. Flag-file gated like the traces
+# above so it survives the resets a freeze hunt runs through.
+[ -f /usrdata/missinglynk/pmsg ] && export ML_PMSG=1
 # dvr-h264: record DVR in H.264 instead of the default H.265 (mlp-record.c ML_DVR_CODEC)
 [ -f /usrdata/missinglynk/dvr-h264 ] && export ML_DVR_CODEC=h264
 # seam: how the 32 rows the two RF tiles both carry are resolved (mlp-seam.c ML_SEAM). File
