@@ -1,0 +1,18 @@
+# Goggle watchdog timeout. Sourced by /etc/init.d/ml-watchdog.
+#
+# This is how long the board stays dead after a hang before the watchdog recovers it, so it is
+# worth keeping small. The dw-wdt counter only expresses 2^(16+i) ticks at its 24 MHz clock and
+# the driver rounds UP to the next step, so only the ladder is reachable:
+#
+#   TOP 12   11.18 s      TOP 13   22.37 s      TOP 14   44.74 s      TOP 15   89.48 s
+#
+# 20 asks for TOP 13, 22.37 s. The skeleton default of 30 lands on TOP 14 and doubles the dead
+# time to 44.74 s for nothing, since nothing needs a timeout between 23 and 44 s.
+#
+# The floor is set by boot, not by taste. The kernel only feeds the timer once its watchdog
+# driver probes, so a timeout the board cannot boot through resets it forever and only pulling
+# power ends that. Measured on this board: 4 s from boot to this service opening the device, so
+# 22.37 s keeps roughly 5x margin. Re-measure before considering TOP 12.
+#
+# Set per device rather than in the skeleton: the air unit's boot-to-open has not been measured.
+TIMEOUT_S=20
