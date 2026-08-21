@@ -340,8 +340,12 @@ chmod 0755 "$STAGE/etc/init.d/usb-gadget"
 
 # Template the same USB product name into the MTP responder config so the MTP-level device
 # name matches the USB descriptor (skeleton/etc/umtprd.conf).
-[ -f "$STAGE/etc/umtprd.conf" ] && sed -i -e "s|@USB_PRODUCT@|$USB_PRODUCT|" "$STAGE/etc/umtprd.conf"
+if [ -f "$STAGE/etc/umtprd.conf" ]; then
+  sed -i -e "s|@USB_PRODUCT@|$USB_PRODUCT|" "$STAGE/etc/umtprd.conf"
+fi
 
 # Template the hardware version into the air-unit link service. File-presence gated: only an
 # air-role overlay ships it, and only those profiles set HW_VERSION.
-[ -f "$STAGE/etc/init.d/ml-air-link" ] && sed -i -e "s|@HW_VERSION@|${HW_VERSION:-V1.0}|" "$STAGE/etc/init.d/ml-air-link"
+if [ -f "$STAGE/etc/init.d/ml-air-link" ]; then
+  sed -i -e "s|@HW_VERSION@|${HW_VERSION:-V1.0}|" "$STAGE/etc/init.d/ml-air-link"
+fi
