@@ -20,10 +20,6 @@ RF_ATTEMPTS=2
 RF_RETRY_WAIT=2
 LINKD=/usr/local/bin/ml-linkd
 
-# Where the encoder bitrate comes from: fixed, adapt or probe. Set in /etc/conf.d/ml-air-link,
-# which OpenRC sources before this runs; the default here is what an image without that file gets.
-RATE_MODE="${RATE_MODE:-adapt}"
-
 depend() {
 	after modules mdev hwdrivers
 }
@@ -96,27 +92,19 @@ start() {
 	# pair; a HAND-DEPLOYED ml-linkd over an older ml-air-video is not, and fails silently in one
 	# direction only - power drops, bitrate does not.
 	#
-	# RATE_MODE past fixed hands the encoder bitrate to the link: adapt writes it, probe only
-	# derives and logs it, sim writes it from a bench profile file instead of the baseband. An
-	# unrecognised value runs fixed rather than guessing, and says so, because the difference is
-	# invisible in flight and visible only here.
-	set -- --role air --hw-version "@HW_VERSION@" --power-adapt
-	case "$RATE_MODE" in
-		fixed) ;;
-		adapt) set -- "$@" --rate-adapt ;;
-		probe) set -- "$@" --rate-probe ;;
-		sim)   set -- "$@" --rate-sim ;;
-		*)
-			ewarn "ml-air-link: RATE_MODE=$RATE_MODE unrecognised, running fixed"
-			;;
-	esac
-
+	# --rate-adapt: the encoder bitrate follows the RF link, derived from the modulation index the
+	# way the vendor air derives it (AR_8030_TX_GetBitRate), and capped by the goggle's bitrate
+	# menu when it sends one. ml-air-video's compiled default is only the rate the encoder opens
+	# with; the first modulation-index sample replaces it about 200 ms in.
+	#
+	# --rate-probe and --rate-sim derive the same number without commanding the encoder, or drive
+	# it from a bench profile file with no radio at all. They are bench flags: stop this service
+	# and run the daemon by hand to use them.
 	if [ -x "$LINKD" ]; then
-		einfo "ml-air-link: encoder bitrate $RATE_MODE"
 		start-stop-daemon --start --background --make-pidfile \
 			--pidfile /run/ml-linkd.pid --exec "$LINKD" \
 			--stdout /var/log/ml-linkd.log --stderr /var/log/ml-linkd.log \
-			-- "$@"
+			-- --role air --hw-version "@HW_VERSION@" --power-adapt --rate-adapt
 	else
 		ewarn "ml-air-link: $LINKD missing"
 	fi

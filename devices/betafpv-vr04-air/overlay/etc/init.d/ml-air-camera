@@ -22,16 +22,14 @@ LOG=/var/log/ml-air-camera.log
 # and decodes with every counter healthy, so nothing downstream reports a fault.
 TUNING=/lib/firmware/artosyn/nt99235-tuning-preview-fpv.bin
 
-# Matches the validated 60 fps camera-to-goggle run. The encoder knobs (5 Mbit/s per tile, CBR,
-# gop 0, qp 0..51, i-frame qp 30, mb rc on) are ml-air-video's own defaults on this path and are
-# left there rather than restated, so the two cannot drift apart.
+# Matches the validated 60 fps camera-to-goggle run. The encoder knobs (bitrate, CBR, gop 0,
+# qp 0..51, i-frame qp 30, mb rc on) are ml-air-video's own defaults on this path and are left
+# there rather than restated, so the two cannot drift apart. The bitrate is the rate the encoder
+# opens with and holds for about 200 ms: ml-linkd's governor owns it from the first
+# modulation-index sample onwards (init.d/ml-air-link, --rate-adapt).
 FPS=60
 BUFS=8          # capture buffers; 8 needs the 26 MiB cvisp-cma, at 17 MiB REQBUFS caps at 5
 INFLIGHT=3      # capture buffers the encoders may hold at once
-
-# Per-tile encoder bitrate in bps, from /etc/conf.d/ml-air-camera. Empty leaves ml-air-video on
-# its own default, so the two cannot drift apart when nobody sets it.
-BITRATE="${BITRATE:-}"
 
 # Seconds to wait for the capture node. The camera modules coldplug from their DT nodes, which
 # races this service rather than ordering before it.
@@ -94,11 +92,6 @@ start() {
 	#
 	# Defers the two wave5 encoder instances and the sendto only, opened once on the first request.
 	# The camera chain still comes up at boot: ar-cvisp brings sensor, VIF and ISP up from STREAMON.
-	if [ -n "$BITRATE" ]; then
-		einfo "ml-air-camera: per-tile bitrate $BITRATE bps"
-		export ML_AIR_BITRATE="$BITRATE"
-	fi
-
 	ML_AIR_CAMERA="$NODE" ML_AIR_FPS="$FPS" ML_AIR_BUFS="$BUFS" ML_AIR_INFLIGHT="$INFLIGHT" \
 	ML_AIR_ON_DEMAND=1 \
 	start-stop-daemon --start --background --make-pidfile \
