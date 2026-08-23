@@ -241,10 +241,6 @@ if [ "$HAS_DISPLAY" = 1 ]; then
   stage_req "$US/gstreamer/build/static/ml-pipeline" usr/local/bin/ml-pipeline \
     --tag video --hint "userspace/gstreamer/scripts/build-static.sh" \
     --why "ground-role video cannot flow without the static receiver pipeline"
-
-  # Watchdog reset so the SPL boots the active slot. Only the HUD's deliberate reset actions run it.
-  stage "$HERE/../glue/build/wdt-reset" usr/local/bin/wdt-reset \
-    --tag slot-switch --strip --hint "make -C glue"
 fi
 
 # --------------------------------------------------------------------------------------
@@ -261,6 +257,14 @@ if [ "$RF_ROLE" = "air" ]; then
   stage "$US/build/ml-msp-echo" usr/local/bin/ml-msp-echo \
     --tag video --strip --hint "make -C userspace msp-echo"
 fi
+
+# Watchdog reset so the SPL boots the active slot. Every board needs it: a plain reboot is a no-op
+# on this SoC, so this is the only software reset either unit has. The HUD's slot-switch and
+# band-change actions run it, `flip-slot.sh` pushes its own copy, and the flasher reboots through
+# the installed one (openRebootCmd in flasher/internal/flow/landing.go), which is why it cannot be
+# gated on the display.
+stage "$HERE/../glue/build/wdt-reset" usr/local/bin/wdt-reset \
+  --tag slot-switch --strip --hint "make -C glue"
 
 # ml-rf-persist writes a newly-paired peer MAC into the config under /usrdata so a bind survives a
 # power cycle; absent, a bind is only a runtime lock the next boot forgets. Both roles need it and

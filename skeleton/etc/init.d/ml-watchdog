@@ -15,10 +15,27 @@ WDT=/dev/watchdog
 WATCHDOG=/sbin/watchdog
 PIDFILE=/run/ml-watchdog.pid
 
-# The driver clamps TIMEOUT_S to what the dw-wdt's counter can express at its clock, so the value
-# in force after arming is whatever it rounded to. Petting is well inside that either way.
+# How long the board stays dead after a hang before the watchdog recovers it, so it is worth
+# keeping small. The driver clamps TIMEOUT_S to what the dw-wdt counter can express and rounds UP,
+# so only the ladder is reachable. Against the 24 MHz the DTS declares:
+#
+#   TOP 12   11.18 s      TOP 13   22.37 s      TOP 14   44.74 s      TOP 15   89.48 s
+#
+# 20 asks for TOP 13. The default of 30 lands on TOP 14 and doubles the dead time for nothing,
+# since nothing needs a timeout between 23 and 44 s.
+#
+# One value for every board, not one per device. The floor is boot: a timeout the board cannot
+# boot through resets it forever and only pulling power ends that. But the first pet is the
+# kernel's, at dw_wdt probe under CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED, not this service opening
+# the device seconds later, and dw_wdt comes from the shared config base with no per-device
+# fragment. So the floor is the same on every board and a per-device value would be tuning
+# against a number that does not vary.
+#
+# The counter was measured at 23,999,766 Hz on the air unit, so the periods above are the real
+# ones. Resets have been observed landing about 1.5x later than that; the cause is unknown and is
+# not the clock. `wdt-reset --status` re-measures the rate on any board without arming anything.
 PET_S="${PET_S:-5}"
-TIMEOUT_S="${TIMEOUT_S:-30}"
+TIMEOUT_S="${TIMEOUT_S:-20}"
 
 start() {
 	ebegin "Arming hardware watchdog (pet ${PET_S}s, reset ${TIMEOUT_S}s)"
