@@ -62,13 +62,24 @@ done
 # and removes the file when done.
 [ -f /usrdata/missinglynk/latstats ] && export ML_LATSTATS=1
 [ -f /usrdata/missinglynk/latraw ] && export ML_LATRAW=1
+
+
 # pmsg: write a per-frame phase trail to /dev/pmsg0 (mlp-pmsg.c ML_PMSG), which is DRAM that
-# survives the watchdog reset a freeze ends in. Needs a kernel built with the debug-freeze
-# fragment; without one ml-pipeline says so and carries on. Flag-file gated like the traces
-# above so it survives the resets a freeze hunt runs through.
+# survives the watchdog reset a freeze ends in. The shipping kernel carries PSTORE_PMSG and the
+# board declares a pmsg record, so /dev/pmsg0 is there and this needs no special build; if a
+# kernel ever lacks it ml-pipeline says so and carries on. Flag-file gated like the traces above
+# so it survives the resets a freeze hunt runs through.
 [ -f /usrdata/missinglynk/pmsg ] && export ML_PMSG=1
+
+# stats: the 2 s counter block (mlp-rf.c ML_STATS). Carries the per-channel FrameId gap and
+# lost-frame counts, the per-tile air-encoder BR/QP from the PREFIX_SEI, the seam skip counters,
+# and the tile-divergence meter, each line stamped with uptime so a DVR offset indexes into
+# ml-logd's stats.csv. ~1.1 MB an hour; the divergence measurement runs only while this is set.
+[ -f /usrdata/missinglynk/stats ] && export ML_STATS=1
+
 # dvr-h264: record DVR in H.264 instead of the default H.265 (mlp-record.c ML_DVR_CODEC)
 [ -f /usrdata/missinglynk/dvr-h264 ] && export ML_DVR_CODEC=h264
+
 # seam: how the 32 rows the two RF tiles both carry are resolved (mlp-seam.c ML_SEAM). File
 # contents select the mode, an empty file meaning 2:
 #   1  split geometry - each tile skips its own overlap rows at the source, so no composite row
@@ -79,6 +90,7 @@ if [ -f /usrdata/missinglynk/seam ]; then
     seam=$(cat /usrdata/missinglynk/seam)
     export ML_SEAM="${seam:-2}"
 fi
+
 # pace: file contents = seed rate in Hz for the phase servo (empty file = start from boot rate)
 if [ -f /usrdata/missinglynk/pace ]; then
     seed=$(cat /usrdata/missinglynk/pace)
