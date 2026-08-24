@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+description="Harvest the previous boot's ramoops record and say what it ended with"
+
+HARVEST=/usr/local/bin/ml-pstore-harvest
+
+# After ml-sdcard so the record lands on the card when one is fitted, and before ml-video so a
+# pipeline that dies early cannot overwrite the trail belonging to the boot that just ended.
+depend() {
+	after ml-sdcard ml-usrdata
+	before ml-video ml-hud
+}
+
+start() {
+	ebegin "Harvesting the previous boot's post-mortem record"
+	if [ ! -x "$HARVEST" ]; then
+		ewarn "ml-pstore: $HARVEST missing; skipping"
+		eend 0
+		return 0
+	fi
+
+	"$HARVEST"
+	# A unit with no ramoops region, no card and a full /usrdata must still boot.
+	eend 0
+}

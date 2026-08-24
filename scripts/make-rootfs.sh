@@ -120,7 +120,7 @@ DEFAULT_SERVICES="
   dropbear ntp-oneshot
   ml-chime ml-sdcard ml-hud ml-logd ml-watchdog ml-video
   ml-air-link ml-air-camera ml-air-ae
-  ml-boot-record
+  ml-boot-record ml-pstore
 "
 
 # shellcheck disable=SC2086  # both lists are space/newline-separated and must word-split

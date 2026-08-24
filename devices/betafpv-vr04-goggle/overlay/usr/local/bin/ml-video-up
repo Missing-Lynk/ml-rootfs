@@ -67,9 +67,17 @@ done
 # pmsg: write a per-frame phase trail to /dev/pmsg0 (mlp-pmsg.c ML_PMSG), which is DRAM that
 # survives the watchdog reset a freeze ends in. The shipping kernel carries PSTORE_PMSG and the
 # board declares a pmsg record, so /dev/pmsg0 is there and this needs no special build; if a
-# kernel ever lacks it ml-pipeline says so and carries on. Flag-file gated like the traces above
-# so it survives the resets a freeze hunt runs through.
-[ -f /usrdata/missinglynk/pmsg ] && export ML_PMSG=1
+# kernel ever lacks it ml-pipeline says so and carries on.
+#
+# ON BY DEFAULT, unlike the traces above. A freeze in the air leaves no other evidence: the console
+# is silent for minutes beforehand, the unit stops answering ping, and the watchdog resets it, so
+# the phase trail is the only record of what the pipeline was doing when the CPU stopped. It has to
+# already be running when the freeze happens, and a flying unit has no serial console and nobody to
+# set a flag file first. ml-pstore-harvest moves the trail off the ramoops region at the next boot.
+#
+# The cost is a ~30-byte write per phase, five per frame, into a DRAM ring. Set the flag file to
+# turn it off on a unit where even that is unwanted.
+[ -f /usrdata/missinglynk/no-pmsg ] || export ML_PMSG=1
 
 # stats: the 2 s counter block (mlp-rf.c ML_STATS). Carries the per-channel FrameId gap and
 # lost-frame counts, the per-tile air-encoder BR/QP from the PREFIX_SEI, the seam skip counters,

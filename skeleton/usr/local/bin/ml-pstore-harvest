@@ -1,0 +1,106 @@
+#!/bin/sh
+# ml-pstore-harvest - move the previous boot's post-mortem record off the ramoops region.
+#
+# ramoops@29100000 keeps a console ring and a pmsg ring across a reset, which is how a hang that
+# kills the kernel before it can log anything is still readable afterwards: the pmsg phase trail
+# ends on whatever the pipeline was doing when the CPU stopped. Nothing consumed those records
+# until now, which left two problems in the field, where no serial console is attached:
+#
+#   1. The rings are re-read at every boot and the files persist until unlinked, so a dump found in
+#      /sys/fs/pstore may be from the last reset or from one days earlier. Harvesting and unlinking
+#      each boot makes a record unambiguous: whatever is in /sys/fs/pstore belongs to the boot that
+#      just ended.
+#   2. Nobody reads /sys/fs/pstore on a flying unit. The records have to land somewhere durable and
+#      announce themselves.
+#
+# So: copy the records out, unlink them, and log one line saying what the previous boot ended with.
+# The operator sees that line in the normal log without a host attached.
+#
+# Records go to the SD card when it is mounted (18 GB, and the DVR is already there) and to
+# /usrdata otherwise. Nothing here ever deletes a record: a post-mortem is the whole reason the
+# unit reset, and reclaiming space is a decision for whoever reads them.
+#
+# /usrdata is 1.7 MB and shared with the RF config, so the fallback protects the partition by
+# REFUSING a record it cannot fit rather than by evicting an older one. A refusal is logged, so a
+# unit that has stopped recording says so instead of going quiet.
+
+PSTORE=/sys/fs/pstore
+SD_DIR=/mnt/sdcard/missinglynk/pstore
+USRDATA_DIR=/usrdata/missinglynk/pstore
+
+# Free space (KiB) to leave behind after writing a record, so the destination keeps working for
+# what else lives on it. /usrdata holds the RF config the radio rewrites on every bind.
+SD_RESERVE_KB=8192
+USRDATA_RESERVE_KB=256
+
+# To stderr so openrc puts it in the boot output, and to /dev/kmsg so it reaches the kernel log
+# ml-logd mirrors into the run directory. syslog is not running on this unit, so logger alone
+# would drop the line.
+log() {
+	echo "ml-pstore: $*" >&2
+	echo "ml-pstore: $*" > /dev/kmsg 2>/dev/null
+}
+
+[ -d "$PSTORE" ] || exit 0
+set -- "$PSTORE"/*
+[ -e "$1" ] || exit 0          # nothing recorded: the previous boot ended cleanly
+
+if [ -d /mnt/sdcard ] && mountpoint -q /mnt/sdcard 2>/dev/null; then
+	dest_base=$SD_DIR
+	reserve=$SD_RESERVE_KB
+else
+	dest_base=$USRDATA_DIR
+	reserve=$USRDATA_RESERVE_KB
+fi
+
+# Refuse rather than evict. The record stays in /sys/fs/pstore, so it is still readable over the
+# network on this boot and is not silently thrown away; it is only lost if the unit resets again.
+need_kb=$(du -sk "$PSTORE" 2>/dev/null | cut -f1)
+[ -n "$need_kb" ] || need_kb=512
+free_kb=$(df -k "$(dirname "$dest_base")" 2>/dev/null | awk 'NR==2 {print $4}')
+[ -n "$free_kb" ] || free_kb=0
+if [ "$free_kb" -lt $((need_kb + reserve)) ]; then
+	log "NOT recording: $dest_base needs $((need_kb + reserve)) KiB free, has $free_kb; the record is left in $PSTORE"
+	exit 0
+fi
+
+seq=0
+while [ -d "$dest_base/$seq" ]; do
+	seq=$((seq + 1))
+done
+dest=$dest_base/$seq
+mkdir -p "$dest" || { log "cannot create $dest; leaving the record in place"; exit 0; }
+
+for f in "$PSTORE"/*; do
+	[ -f "$f" ] || continue
+	cp "$f" "$dest/" 2>/dev/null
+done
+sync
+
+# The verdict line. An ml-pipeline phase trail ends on the phase the unit died in: a 'B' with no
+# matching 'b' is a blit that was entered and never returned. Counting the two is the whole
+# diagnosis at this level, so it goes in the log rather than only in the file.
+verdict=
+if [ -f "$dest/pmsg-ramoops-0" ]; then
+	nb=$(grep -c '^B ' "$dest/pmsg-ramoops-0" 2>/dev/null) || nb=0
+	nb_done=$(grep -c '^b ' "$dest/pmsg-ramoops-0" 2>/dev/null) || nb_done=0
+	[ -n "$nb" ] || nb=0
+	[ -n "$nb_done" ] || nb_done=0
+	last=$(tail -1 "$dest/pmsg-ramoops-0" 2>/dev/null)
+	if [ "$nb" -gt "$nb_done" ]; then
+		verdict="UNMATCHED BLIT (B=$nb b=$nb_done), trail ends: $last"
+	else
+		verdict="phases balanced (B=$nb b=$nb_done), trail ends: $last"
+	fi
+fi
+
+log "previous boot left a post-mortem record in $dest${verdict:+; $verdict}"
+
+# Unlink so the next reset's record cannot be confused with this one. A record that failed to copy
+# is left in place rather than lost.
+for f in "$PSTORE"/*; do
+	[ -f "$f" ] || continue
+	[ -f "$dest/$(basename "$f")" ] && rm -f "$f"
+done
+
+exit 0
