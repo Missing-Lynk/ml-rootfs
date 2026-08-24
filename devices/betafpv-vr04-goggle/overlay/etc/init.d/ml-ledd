@@ -1,5 +1,6 @@
 #!/sbin/openrc-run
-# Status LED indicator: breathe red until the RF link carries video, solid green once it does.
+# Status LED indicator: breathe red with no link, breathe orange while the air unit is in standby
+# (15 fps), solid green at full rate (60 fps). ml-linkd/ml-led-policy.c holds the table.
 #
 # Runs in the boot runlevel (not default like the other ml-* daemons) so the LED is one of the
 # first signs of life. Its only needs are /run (mounted in sysinit) and /dev/spidev* (built-in
@@ -8,7 +9,7 @@
 # any command. This service loads no modules.
 #
 # Best-effort: a missing binary or spidev logs a warning and leaves the box otherwise up.
-description="Status LED: breathe red / solid green off the RF link"
+description="Status LED: red no link / orange standby / green full rate"
 
 LEDD=/usr/local/bin/ml-ledd
 PIDFILE=/run/ml-ledd.pid
