@@ -29,6 +29,7 @@ mkdir -p "$LOGROOT" || { echo "ml-logd: cannot create $LOGROOT"; exit 0; }
 CF="$LOGROOT/.runcount"
 n=0
 [ -f "$CF" ] && read -r n < "$CF" 2>/dev/null
+
 # A power cut mid-write, or the FAT/exFAT damage a battery-out pull leaves behind, leaves this file
 # holding something that is not a run number, and $((n + 1)) on that misbehaves in two ways.
 # Measured under busybox ash: "12x", "3.5" and anything with an embedded space abort the script with
@@ -167,7 +168,7 @@ cleanup() {
 trap cleanup TERM INT
 
 start_kmsg
-echo "uptime_s,mem_free_kb,mem_avail_kb,cma_free_kb,cma_total_kb,load1" > "$STATS"
+echo "uptime_s,mem_free_kb,mem_avail_kb,cma_free_kb,cma_total_kb,load1,reasm_reqd,reasm_fail" > "$STATS"
 
 # Per-thread CPU sampling for the video stack. One row per thread per tick with the thread's
 # CUMULATIVE utime+stime jiffies and its instantaneous state; the host-side report script does
@@ -197,10 +198,13 @@ sample_threads() {
 			tid="${tst%/stat}"
 			tid="${tid##*/}"
 			read -r tname < "${tst%/stat}/comm" 2>/dev/null || tname="?"
+
 			# comm may contain spaces: fields resume after the closing paren.
 			rest="${line##*) }"
+
 			# shellcheck disable=SC2086  # splitting $rest into fields is the intent
 			set -- $rest
+
 			# rest: state ppid pgrp sess tty tpgid flags minflt cminflt majflt cmajflt utime stime
 			state="$1"
 			ut="${12:-0}"
@@ -236,7 +240,39 @@ while : ; do
 
 	read -r l1 _ < /proc/loadavg
 
-	echo "$up,$mf,$ma,$cf,$ct,$l1" >> "$STATS"
+	# IP reassembly, which is where downlink loss actually lands. One video access unit is one
+	# UDP datagram and sdio0 runs a 4096-byte MTU, so a frame leaves the air as several IP
+	# fragments and losing any one of them discards the whole frame for that tile. ReasmFails
+	# counts exactly those. Two builtin reads, no fork.
+	rq=""; rf=""
+	while read -r key rest; do
+		if [ "$key" = "Ip:" ]; then
+			case "$rest" in
+				*ReasmReqds*) hdr="$rest" ;;
+				*)            val="$rest" ;;
+			esac
+		fi
+	done < /proc/net/snmp
+
+	if [ -n "${hdr:-}" ] && [ -n "${val:-}" ]; then
+		# shellcheck disable=SC2086  # splitting both rows into positional fields is the intent
+		set -- $hdr
+		i=1
+		for name in "$@"; do
+			case "$name" in
+				ReasmReqds) rq_at=$i ;;
+				ReasmFails) rf_at=$i ;;
+			esac
+			i=$((i + 1))
+		done
+
+		# shellcheck disable=SC2086
+		set -- $val
+		eval "rq=\${${rq_at:-0}:-}"
+		eval "rf=\${${rf_at:-0}:-}"
+	fi
+
+	echo "$up,$mf,$ma,$cf,$ct,$l1,$rq,$rf" >> "$STATS"
 
 	sample_threads "$up"
 
