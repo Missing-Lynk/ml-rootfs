@@ -351,5 +351,12 @@ fi
 # Template the hardware version into the air-unit link service. File-presence gated: only an
 # air-role overlay ships it, and only those profiles set HW_VERSION.
 if [ -f "$STAGE/etc/init.d/ml-air-link" ]; then
-  sed -i -e "s|@HW_VERSION@|${HW_VERSION:-V1.0}|" "$STAGE/etc/init.d/ml-air-link"
+  sed -i \
+    -e "s|@HW_VERSION@|${HW_VERSION:-V1.0}|" \
+    -e "s|@RF_SDIO_MTU@|${RF_SDIO_MTU:-4096}|" \
+    "$STAGE/etc/init.d/ml-air-link"
+fi
+
+if [ -f "$STAGE/etc/init.d/ml-video" ]; then
+  sed -i -e "s|@RF_SDIO_MTU@|${RF_SDIO_MTU:-4096}|" "$STAGE/etc/init.d/ml-video"
 fi

@@ -11,6 +11,7 @@ RF_CFG_RACE=bb_config_gnd.json.usr_cfg.json     # race band, 16 channels: its gr
 RF_CFG_NORMAL=bb_config_gnd.json.normal_cfg.json  # normal band, 3 channels: same blob, chan_valid_bmp rewritten
 RF_BAND_MARKER=/usrdata/missinglynk/rf-band     # "normal" selects the normal band; absent/anything else = race
 RF_CHAN_MARKER=/usrdata/missinglynk/rf-channel  # per-band saved channel; passed to ml-linkd as ML_OPEN_CHNIDX
+RF_SDIO_MTU="@RF_SDIO_MTU@"
 LINKD=/usr/local/bin/ml-linkd
 VIDEO_UP=/usr/local/bin/ml-video-up
 
@@ -61,7 +62,9 @@ rf_up() {
 	# rather than fails (the AR8030 sometimes powers up answering a garbage SDIO devid) would
 	# otherwise stall the rest of boot indefinitely. A timeout exits non-zero, so the caller's
 	# "RF bring-up incomplete" warning covers a hang exactly as it covers a failure.
-	ML_RF_FW_PATH=/usrdata/missinglynk timeout 30 "$RF_BRINGUP" "$RF_FW" "$cfg"
+	ML_RF_FW_PATH=/usrdata/missinglynk \
+	ML_RF_SDIO_MTU="${ML_RF_SDIO_MTU:-$RF_SDIO_MTU}" \
+	timeout 30 "$RF_BRINGUP" "$RF_FW" "$cfg"
 }
 
 start() {

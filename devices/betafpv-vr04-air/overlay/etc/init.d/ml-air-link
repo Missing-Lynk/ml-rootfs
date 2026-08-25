@@ -15,6 +15,7 @@ RF_CFG=bb_config_air.json
 RF_LOG=/var/log/ml-rf-bringup.log
 USR_DIR=/usrdata/missinglynk
 RF_LEDGER=$USR_DIR/rf-bringup.log
+RF_SDIO_MTU="@RF_SDIO_MTU@"
 RF_LEDGER_KEEP=200
 RF_ATTEMPTS=2
 RF_RETRY_WAIT=2
@@ -51,8 +52,9 @@ start() {
 		rf_ok=1
 		while [ "$attempt" -le "$RF_ATTEMPTS" ]; do
 			echo "--- attempt $attempt at $(cut -d' ' -f1 /proc/uptime)s uptime" >>"$RF_LOG"
-			if ML_RF_SDIO_ADDR=10.0.0.100 timeout 30 "$RF_BRINGUP" "$RF_FW" "$RF_CFG" \
-					>>"$RF_LOG" 2>&1; then
+			if ML_RF_SDIO_ADDR=10.0.0.100 \
+					ML_RF_SDIO_MTU="${ML_RF_SDIO_MTU:-$RF_SDIO_MTU}" \
+					timeout 30 "$RF_BRINGUP" "$RF_FW" "$RF_CFG" >>"$RF_LOG" 2>&1; then
 				rf_ok=0
 				break
 			fi
