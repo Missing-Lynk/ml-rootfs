@@ -105,4 +105,11 @@ if [ -f /usrdata/missinglynk/pace ]; then
     export ML_PACE="${seed:-1}" ML_PACE_DBG=1
 fi
 
+# phase-force: file contents = microseconds from the tile-0 submit to the next flip event
+# (mlp-pace.c ML_PHASE_FORCE). Bench reproducer for the hard hang; adds up to one vsync of latency.
+if [ -f /usrdata/missinglynk/phase-force ]; then
+    ML_PHASE_FORCE="$(cat /usrdata/missinglynk/phase-force)"
+    export ML_PHASE_FORCE
+fi
+
 exec env ML_HEAP="${ML_HEAP:-default_cma_region}" ML_COMPOSE=1 ML_COMP_MAX="${ML_COMP_MAX:-10}" ml-pipeline "${1:-rf}"
