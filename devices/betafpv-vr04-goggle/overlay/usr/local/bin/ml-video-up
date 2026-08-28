@@ -99,10 +99,16 @@ if [ -f /usrdata/missinglynk/seam ]; then
     export ML_SEAM="${seam:-2}"
 fi
 
-# pace: file contents = seed rate in Hz for the phase servo (empty file = start from boot rate)
+# pace: the display phase loop runs by default. File contents override it: 0 switches it
+# off for an A/B against an unpaced run, a rate in Hz seeds its base instead of the mode
+# rate. The 1 Hz trace is separate and stays off unless pace-dbg exists.
 if [ -f /usrdata/missinglynk/pace ]; then
     seed=$(cat /usrdata/missinglynk/pace)
-    export ML_PACE="${seed:-1}" ML_PACE_DBG=1
+    export ML_PACE="${seed:-1}"
+fi
+
+if [ -f /usrdata/missinglynk/pace-dbg ]; then
+    export ML_PACE_DBG=1
 fi
 
 # phase-force: file contents = microseconds from the tile-0 submit to the next flip event
