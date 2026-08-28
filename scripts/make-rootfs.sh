@@ -63,10 +63,10 @@ sed -i "s|^root:[^:]*:|root:${ROOT_HASH//|/\\|}:|" "$ROOT/etc/shadow"
 echo "${FLAVOR:-dev}" > "$ROOT/etc/ml-flavor"
 
 # Record the image identity in an os-release-style /etc/ml-release: the open firmware
-# version (mirrors the mlimg bundle label), the kernel version, the rootfs/kernel
-# git-describes, the build time, flavor, and target device. Read-only like the rest of the
-# rootfs; answers "what image is this" from inside the slot (ml-info, the CLI, the boot
-# service that self-heals the per-unit device record).
+# version (mirrors the mlimg bundle label), the kernel version, the git-describes of every
+# tree that reaches the device, the build time, flavor, and target device. Read-only like
+# the rest of the rootfs; answers "what image is this" from inside the slot (ml-info, the
+# CLI, the boot service that self-heals the per-unit device record).
 cat > "$ROOT/etc/ml-release" <<EOF
 ML_NAME="MissingLynk open firmware"
 ML_VERSION="${ML_VERSION:-dev}"
@@ -75,6 +75,8 @@ ML_DEVICE="${DEV:-}"
 ML_KERNEL_VERSION="${ML_KERNEL_VERSION:-}"
 ML_KERNEL_GIT="${ML_KERNEL_GIT:-}"
 ML_ROOTFS_GIT="${ML_ROOTFS_GIT:-}"
+ML_USERSPACE_GIT="${ML_USERSPACE_GIT:-}"
+ML_SUPERPROJECT_GIT="${ML_SUPERPROJECT_GIT:-}"
 ML_BUILD_TIME="${ML_BUILD_TIME:-}"
 EOF
 
