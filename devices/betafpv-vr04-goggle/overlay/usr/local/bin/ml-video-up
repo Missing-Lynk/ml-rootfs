@@ -88,6 +88,14 @@ done
 # dvr-h264: record DVR in H.264 instead of the default H.265 (mlp-record.c ML_DVR_CODEC)
 [ -f /usrdata/missinglynk/dvr-h264 ] && export ML_DVR_CODEC=h264
 
+# dvr-bitrate: bits per second for the DVR encoder (mlp-record.c ML_DVR_BITRATE). The file's
+# contents enable wave5's rate control and bound the bitstream; absent, the encoder runs at the
+# driver's fixed-QP default and its output is unbounded.
+if [ -s /usrdata/missinglynk/dvr-bitrate ]; then
+    ML_DVR_BITRATE="$(cat /usrdata/missinglynk/dvr-bitrate)"
+    export ML_DVR_BITRATE
+fi
+
 # seam: how the 32 rows the two RF tiles both carry are resolved (mlp-seam.c ML_SEAM). File
 # contents select the mode, an empty file meaning 2:
 #   1  split geometry - each tile skips its own overlap rows at the source, so no composite row
