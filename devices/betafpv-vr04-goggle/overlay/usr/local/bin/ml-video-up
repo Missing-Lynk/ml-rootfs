@@ -85,8 +85,8 @@ done
 # ml-logd's stats.csv. ~1.1 MB an hour; the divergence measurement runs only while this is set.
 [ -f /usrdata/missinglynk/stats ] && export ML_STATS=1
 
-# dvr-h264: record DVR in H.264 instead of the default H.265 (mlp-record.c ML_DVR_CODEC)
-[ -f /usrdata/missinglynk/dvr-h264 ] && export ML_DVR_CODEC=h264
+# dvr-h265: record DVR in H.265 instead of the default H.264 (mlp-record.c ML_DVR_CODEC)
+[ -f /usrdata/missinglynk/dvr-h265 ] && export ML_DVR_CODEC=h265
 
 # dvr-bitrate: bits per second for the DVR encoder (mlp-record.c ML_DVR_BITRATE). The file's
 # contents enable wave5's rate control and bound the bitstream; absent, the encoder runs at the
