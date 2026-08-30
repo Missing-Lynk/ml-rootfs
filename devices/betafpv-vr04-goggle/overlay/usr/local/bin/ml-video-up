@@ -104,19 +104,6 @@ if [ -s /usrdata/missinglynk/dvr-qp ]; then
     export ML_DVR_QP
 fi
 
-# dvr-qp-min / dvr-qp-max: quantiser bounds 0..63 the firmware is held to (mlp-record.c
-# ML_DVR_QP_MIN / ML_DVR_QP_MAX). They apply whether or not rate control is on. Absent, the
-# driver's own 8 and 51 stand.
-if [ -s /usrdata/missinglynk/dvr-qp-min ]; then
-    ML_DVR_QP_MIN="$(cat /usrdata/missinglynk/dvr-qp-min)"
-    export ML_DVR_QP_MIN
-fi
-
-if [ -s /usrdata/missinglynk/dvr-qp-max ]; then
-    ML_DVR_QP_MAX="$(cat /usrdata/missinglynk/dvr-qp-max)"
-    export ML_DVR_QP_MAX
-fi
-
 # dvr-gop: frames between IDRs for the DVR encoder (mlp-record.c ML_DVR_GOP, default 60). 0 omits
 # the controls and leaves the driver's own GOP.
 if [ -s /usrdata/missinglynk/dvr-gop ]; then
