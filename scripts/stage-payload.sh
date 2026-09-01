@@ -152,12 +152,63 @@ case "$RF_ROLE" in
     ;;
 esac
 
+# The vendor's own unbound pairing identity, read from usr/usrdata/ar813x/usr_cfg.json on a stock
+# slot A. Two fields carry it: "ap.candidate.slot" is the goggle's allowlist of air units, and
+# "dev.ap_mac" the single goggle an air unit answers. Any other value in either is a real unit.
+RF_UNBOUND_SLOTS='["55555555", "44444444", "33333333", "22222222", "11111111"]'
+RF_UNBOUND_AP_MAC='aabbccdd'
+
+# Reset the pairing identity in the config at $1, writing the result to $2.
+#
+# The staged config is a capture from a bound device, and auto_merge on that device wrote the peers
+# it had paired with into it. Baking those in hands every recipient the capturing unit's bindings: a
+# goggle that accepts someone else's air units, and an air unit that answers only the capturing
+# goggle, so it never links to the one it ships with. Both fields go back to the vendor
+# placeholders. Binding still works from there - ml-air-bind opens its pair window on the ffffffff
+# broadcast MAC and ml-rx-bind reads the pair reply, neither consulting the baked value - and what a
+# bind commits is written to /usrdata/missinglynk by ml-rf-persist, which outlives a reflash.
+#
+# Both checks are load-bearing: a field the rewrite missed is a real MAC handed to strangers.
+rf_config_unbind() {
+  local src="$1" dst="$2" want_slots slots ap_mac
+
+  sed -E -e 's/("slot":[[:space:]]*)\[[^]]*\]/\1'"$RF_UNBOUND_SLOTS"'/' \
+         -e 's/("ap_mac":[[:space:]]*)"[^"]*"/\1"'"$RF_UNBOUND_AP_MAC"'"/' \
+         "$src" > "$dst"
+
+  # An absent field reads back empty and fails the same comparison, so a config that never had the
+  # key, or spells it in a shape the rewrite does not match, is a build failure and not a pass.
+  want_slots=$(printf '%s' "$RF_UNBOUND_SLOTS" | tr -d ' "[]')
+  slots=$(grep -o '"slot":[[:space:]]*\[[^]]*\]' "$dst" | sed -E 's/.*\[(.*)\]/\1/' | tr -d ' "') || slots=""
+  ap_mac=$(grep -o '"ap_mac":[[:space:]]*"[^"]*"' "$dst" | sed -E 's/.*"([^"]*)"$/\1/') || ap_mac=""
+
+  if [ "$slots" != "$want_slots" ]; then
+    die "RF firmware: candidate.slot in $src did not reset (reads [$slots]) - the image would ship real air-unit MACs"
+  fi
+
+  if [ "$ap_mac" != "$RF_UNBOUND_AP_MAC" ]; then
+    die "RF firmware: dev.ap_mac in $src did not reset (reads \"$ap_mac\") - the image would ship a real goggle MAC"
+  fi
+}
+
 # Paired: the driver needs image and config together, so half a set stages as none.
 if [ -f "$RF_FW" ] && [ -f "$RF_CFG" ]; then
+  # Distribution default: stage the config with the capturing device's pairing identity reset, not
+  # the capture itself. ML_RF_KEEP_BINDINGS=1 bakes the capture as it is, for bench units that
+  # should come up already paired; that image carries the bindings of whatever device the blobs
+  # came from, and is for the bench only.
+  if [ "${ML_RF_KEEP_BINDINGS:-0}" = "1" ]; then
+    log "RF firmware: ML_RF_KEEP_BINDINGS=1, baking the captured pairing identity - bench image, do not distribute"
+  else
+    mkdir -p "$WORK/rf-config"
+    rf_config_unbind "$RF_CFG" "$WORK/rf-config/${RF_CFG##*/}"
+    RF_CFG="$WORK/rf-config/${RF_CFG##*/}"
+  fi
+
   stage "$RF_FW"  "$RF_FW_DST"  --tag "RF firmware" --mode 0644
   stage "$RF_CFG" "$RF_CFG_DST" --tag "RF firmware" --mode 0644
 
-  # Ground carries a second, normal-band config derived from the captured one. Band =
+  # Ground carries a second, normal-band config derived from the staged one. Band =
   # chan_valid_bmp, which only enters the chip at firmware upload, so each band is a whole blob
   # and switching costs a boot. The captured config is race (0x0007FFF8, table indices 3..18);
   # rewrite that one field for normal (0x00000007 = 5758/5788/5828). ml-video picks between them

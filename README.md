@@ -70,8 +70,12 @@ If `../kernel/modules/build.sh` has staged modules, `build.sh` copies them into 
 `scripts/stage-payload.sh` (sourced by `build.sh`) bakes required proprietary blobs into `/lib/firmware` from `../firmware/bin/slot-a/` (populate it from your own device with `../glue/fetch/fetch-vendor-blobs.sh`):
 
 - **Codec firmware** - `chagall.bin` as `cnm/wave521c_k3_codec_fw.bin`, which `wave5.ko` requests on load.
-- **RF baseband firmware** - the AR8030 image and config for this device's `RF_ROLE`.
+- **RF baseband firmware** - the AR8030 image and config for this device's `RF_ROLE`, with the pairing identity reset (see below).
 - **ISP tuning blob** - air unit only; missing or wrong-sized tuning is fatal.
+
+The RF config is captured from a bound device, so it names the peers that device had paired with: the goggle's `ap.candidate.slot` allowlist of air units, and the air unit's `dev.ap_mac`, the one goggle it answers. Both are reset to the vendor placeholders before staging, and the build fails if either field survives the reset. A recipient binds their own pair; `ml-rf-persist` writes what a bind commits to `/usrdata/missinglynk`, which outlives a reflash.
+
+`ML_RF_KEEP_BINDINGS=1` bakes the captured identity instead, for a bench unit that should come up already paired. That image carries the bindings of whatever device the blobs came from.
 
 Open-stack binaries are staged into `/usr/local/bin` from the sibling trees. Role-critical binaries are required; convenience and diagnostic helpers are staged when present. `scripts/stage-payload.sh` is the authoritative staging list, and each entry names the command that builds it.
 
